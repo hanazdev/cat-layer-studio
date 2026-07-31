@@ -1,10 +1,33 @@
 from __future__ import annotations
 
-from math import cos, radians, sin
+from math import cos, isfinite, radians, sin
 
 from PIL import Image
 
 from cat_layer_studio.models.transform import Transform
+
+
+def calculate_fit_inside_scale(
+    source_size: tuple[int, int],
+    canvas_size: tuple[int, int],
+) -> float:
+    """Return the exact uniform scale that keeps the whole source inside the canvas."""
+    dimensions = (*source_size, *canvas_size)
+    if any(dimension <= 0 for dimension in dimensions):
+        raise ValueError("Source and canvas dimensions must be greater than zero.")
+    scale = min(canvas_size[0] / source_size[0], canvas_size[1] / source_size[1])
+    if not isfinite(scale) or scale <= 0:
+        raise ValueError("The calculated fit scale must be a finite positive number.")
+    return scale
+
+
+def fit_inside_transform(
+    source_size: tuple[int, int],
+    canvas_size: tuple[int, int],
+) -> Transform:
+    """Create a centred, non-destructive whole-image fitting transform."""
+    scale = calculate_fit_inside_scale(source_size, canvas_size)
+    return Transform(x=0.0, y=0.0, scale_x=scale, scale_y=scale, rotation_degrees=0.0)
 
 
 def rasterise_transform(

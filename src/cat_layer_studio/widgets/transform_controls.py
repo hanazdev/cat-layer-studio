@@ -18,6 +18,7 @@ from cat_layer_studio.models.transform import Transform
 
 class TransformControls(QWidget):
     transform_changed = Signal(object)
+    fit_inside_requested = Signal()
     reset_requested = Signal()
     undo_requested = Signal()
     redo_requested = Signal()
@@ -25,6 +26,7 @@ class TransformControls(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._updating = False
+        self._precise_transform = Transform()
         self.x = self._spin(-4096, 4096, 0.25, 2, " px")
         self.y = self._spin(-4096, 4096, 0.25, 2, " px")
         self.width = self._spin(1, 1000, 0.1, 2, "%")
@@ -37,7 +39,23 @@ class TransformControls(QWidget):
         self.warning = QLabel()
         self.warning.setWordWrap(True)
 
-        values = QGroupBox("Exact fit values")
+        whole_image = QGroupBox("Whole image size")
+        whole_layout = QVBoxLayout(whole_image)
+        helper = QLabel(
+            "Resize the entire imported image so it fits inside the locked project canvas "
+            "without stretching or cropping it."
+        )
+        helper.setWordWrap(True)
+        self.fit_inside_button = QPushButton("Fit whole image to canvas")
+        self.fit_inside_button.setStyleSheet("font-weight: 600; padding: 8px")
+        self.reset_size_button = QPushButton("Reset to original size")
+        self.fit_inside_button.clicked.connect(self.fit_inside_requested)
+        self.reset_size_button.clicked.connect(self.reset_requested)
+        whole_layout.addWidget(helper)
+        whole_layout.addWidget(self.fit_inside_button)
+        whole_layout.addWidget(self.reset_size_button)
+
+        values = QGroupBox("Exact adjustments")
         form = QFormLayout(values)
         form.addRow("Move left / right", self.x)
         form.addRow("Move up / down", self.y)
@@ -60,7 +78,7 @@ class TransformControls(QWidget):
         actions = QGridLayout()
         undo = QPushButton("Undo")
         redo = QPushButton("Redo")
-        reset = QPushButton("Reset all")
+        reset = QPushButton("Reset all adjustments")
         undo.clicked.connect(self.undo_requested)
         redo.clicked.connect(self.redo_requested)
         reset.clicked.connect(self.reset_requested)
@@ -69,6 +87,7 @@ class TransformControls(QWidget):
         actions.addWidget(reset, 1, 0, 1, 2)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(whole_image)
         layout.addWidget(values)
         layout.addWidget(nudges)
         layout.addLayout(actions)
@@ -87,16 +106,11 @@ class TransformControls(QWidget):
         return spin
 
     def transform(self) -> Transform:
-        return Transform(
-            self.x.value(),
-            self.y.value(),
-            self.width.value() / 100,
-            self.height.value() / 100,
-            self.rotation.value(),
-        )
+        return self._precise_transform
 
     def set_transform(self, transform: Transform) -> None:
         self._updating = True
+        self._precise_transform = transform
         self.x.setValue(transform.x)
         self.y.setValue(transform.y)
         self.width.setValue(transform.scale_x * 100)
@@ -109,12 +123,28 @@ class TransformControls(QWidget):
         if self._updating:
             return
         changed = self.sender()
+        values = self._precise_transform.to_dict()
         if self.lock_aspect.isChecked() and changed in (self.width, self.height):
             other = self.height if changed is self.width else self.width
             self._updating = True
             other.setValue(changed.value())
             self._updating = False
-        transform = self.transform()
+        if changed is self.x:
+            values["x"] = self.x.value()
+        elif changed is self.y:
+            values["y"] = self.y.value()
+        elif changed is self.width:
+            values["scale_x"] = self.width.value() / 100
+            if self.lock_aspect.isChecked():
+                values["scale_y"] = self.height.value() / 100
+        elif changed is self.height:
+            values["scale_y"] = self.height.value() / 100
+            if self.lock_aspect.isChecked():
+                values["scale_x"] = self.width.value() / 100
+        elif changed is self.rotation:
+            values["rotation_degrees"] = self.rotation.value()
+        transform = Transform.from_dict(values)
+        self._precise_transform = transform
         self._show_warning(transform)
         self.transform_changed.emit(transform)
 

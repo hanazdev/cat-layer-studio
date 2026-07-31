@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -25,7 +26,8 @@ from cat_layer_studio.services.comparison_service import alpha_only, difference,
 from cat_layer_studio.services.export_service import export_component
 from cat_layer_studio.services.image_loader import LoadedImage, load_image
 from cat_layer_studio.services.landmark_fit_service import suggest_uniform_transform
-from cat_layer_studio.services.transform_service import rasterise_transform
+from cat_layer_studio.services.transform_service import fit_inside_transform, rasterise_transform
+from cat_layer_studio.widgets.fit_preview_dialog import FitPreviewDialog
 from cat_layer_studio.widgets.image_canvas import CanvasTool, ImageCanvas
 from cat_layer_studio.widgets.transform_controls import TransformControls
 
@@ -46,6 +48,7 @@ class FitComponentView(QWidget):
         self.history_index = 0
         self._mask_edited = False
         self._point_target = "candidate"
+        self._fit_suggestion_dismissed = False
         self.candidate_points: list[tuple[float, float]] = []
         self.master_points: list[tuple[float, float]] = []
 
@@ -62,7 +65,8 @@ class FitComponentView(QWidget):
         self.canvas.mask_changed.connect(lambda: setattr(self, "_mask_edited", True))
         self.controls = TransformControls()
         self.controls.transform_changed.connect(self._transform_changed)
-        self.controls.reset_requested.connect(lambda: self._commit_transform(Transform()))
+        self.controls.fit_inside_requested.connect(self.preview_fit_inside)
+        self.controls.reset_requested.connect(self._reset_transform)
         self.controls.undo_requested.connect(self.undo)
         self.controls.redo_requested.connect(self.redo)
 
@@ -189,6 +193,8 @@ class FitComponentView(QWidget):
     def load_candidate(self, path: Path, transform: Transform | None = None) -> None:
         self.candidate = load_image(path)
         self.candidate_path = path
+        self._fit_suggestion_dismissed = False
+        is_new_import = transform is None
         chosen = transform or Transform()
         self.history = [chosen]
         self.history_index = 0
@@ -204,6 +210,11 @@ class FitComponentView(QWidget):
         self.candidate_imported.emit(str(path))
         self.refresh()
         QTimer.singleShot(0, self.canvas.fit_to_view)
+        if is_new_import and (
+            self.candidate.original_size[0] > self.canvas_size[0]
+            or self.candidate.original_size[1] > self.canvas_size[1]
+        ):
+            QTimer.singleShot(0, self._offer_import_fit)
 
     def choose_candidate(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -319,6 +330,57 @@ class FitComponentView(QWidget):
 
     def _transform_changed(self, transform: Transform) -> None:
         self._commit_transform(transform)
+
+    def preview_fit_inside(self, *, apply_label: str = "Apply fit") -> bool:
+        if not self.candidate:
+            QMessageBox.information(
+                self, "Import a part first", "Choose a candidate image before fitting it."
+            )
+            return False
+        transform = fit_inside_transform(self.candidate.original_size, self.canvas_size)
+        dialog = FitPreviewDialog(
+            self.candidate.image,
+            self.canvas_size,
+            transform,
+            apply_label=apply_label,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._fit_suggestion_dismissed = True
+            return False
+        self.controls.lock_aspect.setChecked(True)
+        self._commit_transform(transform)
+        self.mode.setCurrentText("Overlay")
+        self.alpha_status.setText(
+            "The whole image now fits the canvas. Use the fine movement and resize controls only "
+            "if the cat still does not align exactly with the master."
+        )
+        return True
+
+    def _offer_import_fit(self) -> None:
+        if not self.candidate or self._fit_suggestion_dismissed:
+            return
+        scale = fit_inside_transform(self.candidate.original_size, self.canvas_size).scale_x
+        box = QMessageBox(self)
+        box.setWindowTitle("Image is larger than the canvas")
+        box.setText(
+            f"This image is {self.candidate.original_size[0]} × "
+            f"{self.candidate.original_size[1]}, but your project canvas is "
+            f"{self.canvas_size[0]} × {self.canvas_size[1]}. Resize it automatically so the "
+            f"whole image fits? Suggested resize: {scale * 100:.2f}%."
+        )
+        fit = box.addButton("Fit automatically", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is fit:
+            self.preview_fit_inside(apply_label="Apply fit")
+        else:
+            self._fit_suggestion_dismissed = True
+
+    def _reset_transform(self) -> None:
+        self._fit_suggestion_dismissed = False
+        self.controls.lock_aspect.setChecked(True)
+        self._commit_transform(Transform())
 
     def _commit_transform(self, transform: Transform) -> None:
         if transform == self.history[self.history_index]:
