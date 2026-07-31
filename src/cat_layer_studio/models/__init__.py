@@ -1,0 +1,1 @@
+"""Serializable project models."""
