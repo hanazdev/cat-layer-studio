@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -22,13 +23,17 @@ from PySide6.QtWidgets import (
 from cat_layer_studio.constants import APP_NAME, DEFAULT_RIG_PROFILE
 from cat_layer_studio.models.project import CandidateState, Project
 from cat_layer_studio.models.transform import Transform
+from cat_layer_studio.services.image_loader import load_image
 from cat_layer_studio.services.project_service import (
     create_project,
     import_source,
     load_project,
+    replace_master,
     save_project,
 )
+from cat_layer_studio.services.transform_service import fit_inside_transform
 from cat_layer_studio.views.fit_component_view import FitComponentView
+from cat_layer_studio.widgets.fit_preview_dialog import FitPreviewDialog
 
 
 class MainWindow(QMainWindow):
@@ -84,12 +89,28 @@ class MainWindow(QMainWindow):
         actions.addWidget(create)
         actions.addWidget(open_existing)
         actions.addStretch()
+        self.master_details_button = QPushButton("View master details")
+        self.replace_master_button = QPushButton("Replace master image…")
+        self.resize_master_button = QPushButton("Resize current master to project canvas")
+        self.master_details_button.clicked.connect(self.view_master_details)
+        self.replace_master_button.clicked.connect(self.replace_master_dialog)
+        self.resize_master_button.clicked.connect(self.resize_current_master)
+        master_actions = QHBoxLayout()
+        for button in (
+            self.master_details_button,
+            self.replace_master_button,
+            self.resize_master_button,
+        ):
+            button.setEnabled(False)
+            master_actions.addWidget(button)
+        master_actions.addStretch()
         self.project_status = QLabel("No project is open.")
         self.project_status.setWordWrap(True)
         layout.addWidget(heading)
         layout.addWidget(description)
         layout.addLayout(actions)
         layout.addWidget(self.project_status)
+        layout.addLayout(master_actions)
         layout.addStretch()
         return page
 
@@ -137,9 +158,36 @@ class MainWindow(QMainWindow):
             return
         project = Project(name.text().strip() or "Cat project", "", width.value(), height.value())
         try:
-            create_project(Path(directory), project, Path(master))
+            master_path = Path(master)
+            while True:
+                loaded = load_image(master_path)
+                if loaded.original_size == project.canvas_size:
+                    normalise = False
+                    break
+                choice = self._master_size_choice(loaded.image, project.canvas_size)
+                if choice == "normalise":
+                    normalise = True
+                    break
+                if choice == "keep":
+                    normalise = False
+                    break
+                if choice == "choose":
+                    replacement, _ = QFileDialog.getOpenFileName(
+                        self,
+                        "Choose another canonical master cat",
+                        "",
+                        "Images (*.png *.jpg *.jpeg *.webp)",
+                    )
+                    if not replacement:
+                        return
+                    master_path = Path(replacement)
+                    continue
+                return
+            create_project(
+                Path(directory), project, master_path, normalise_master=normalise
+            )
             self._activate_project(Path(directory), project)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RuntimeError, MemoryError) as error:
             QMessageBox.critical(
                 self,
                 "Project could not be created",
@@ -156,7 +204,7 @@ class MainWindow(QMainWindow):
         try:
             directory, project = load_project(Path(filename))
             self._activate_project(directory, project)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RuntimeError, MemoryError) as error:
             QMessageBox.critical(
                 self,
                 "Project could not be opened",
@@ -179,9 +227,160 @@ class MainWindow(QMainWindow):
             f"{project.canvas_width} × {project.canvas_height}\nMaster: {project.master_path}\n"
             f"Rig profile identifier: {project.rig_profile or DEFAULT_RIG_PROFILE}"
         )
+        for button in (
+            self.master_details_button,
+            self.replace_master_button,
+            self.resize_master_button,
+        ):
+            button.setEnabled(True)
         self._refresh_library()
         self.tabs.setCurrentWidget(self.fit_view)
         self.statusBar().showMessage(f"Opened {project.name}. The master image is locked.")
+
+    def _master_size_choice(self, source, canvas_size: tuple[int, int]) -> str:
+        transform = fit_inside_transform(source.size, canvas_size)
+        larger = source.width > canvas_size[0] or source.height > canvas_size[1]
+        box = QMessageBox(self)
+        box.setWindowTitle("Master size differs from the locked canvas")
+        if larger:
+            box.setText(
+                "The selected master image is larger than the locked project canvas. "
+                "Cat Layer Studio can resize it uniformly so the whole image fits without "
+                "cropping or stretching."
+            )
+            preview_text = "Preview resize"
+        else:
+            box.setText(
+                "This master is smaller than the project canvas. Enlarging it may soften the "
+                "artwork. Create a canvas-sized working master anyway?"
+            )
+            preview_text = "Preview enlargement"
+        box.setInformativeText(f"Suggested resize: {transform.scale_x * 100:.2f}%")
+        preview = box.addButton(preview_text, QMessageBox.ButtonRole.AcceptRole)
+        keep = box.addButton("Keep original size", QMessageBox.ButtonRole.DestructiveRole)
+        choose = box.addButton("Choose another image", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("Cancel project creation", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is preview:
+            dialog = FitPreviewDialog(
+                source,
+                canvas_size,
+                transform,
+                apply_label="Use resized master",
+                keep_label="Keep original size",
+                window_title="Preview master resize",
+                subject_label="Original master",
+                parent=self,
+            )
+            dialog.exec()
+            if dialog.choice == "apply":
+                return "normalise"
+            if dialog.choice != "keep":
+                return "cancel"
+            clicked = keep
+        if clicked is keep:
+            warning = QMessageBox.warning(
+                self,
+                "Keep mismatched master?",
+                "A master that does not match the project canvas may be cropped in the fitting "
+                "view and may not provide a reliable alignment reference.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            return "keep" if warning == QMessageBox.StandardButton.Yes else "cancel"
+        return "choose" if clicked is choose else "cancel"
+
+    def view_master_details(self) -> None:
+        if not self.project:
+            return
+        project = self.project
+        original_size = (
+            f"{project.master_original_size[0]} × {project.master_original_size[1]}"
+            if project.master_original_size
+            else "Unknown (legacy project)"
+        )
+        scale = (
+            f"{project.master_resize_scale * 100:.2f}%"
+            if project.master_resize_scale is not None
+            else "Not recorded"
+        )
+        QMessageBox.information(
+            self,
+            "Master details",
+            f"Original: {project.master_original_path or project.master_path}\n"
+            f"Original size: {original_size}\nWorking master: {project.master_path}\n"
+            f"Locked canvas: {project.canvas_width} × {project.canvas_height}\n"
+            f"Resize: {scale}",
+        )
+
+    def replace_master_dialog(self) -> None:
+        if not self.project or not self.project_directory:
+            return
+        proceed = QMessageBox.warning(
+            self,
+            "Replace the locked master?",
+            "Replacing the master changes the positional reference for every component in this "
+            "project. Existing fitted parts may need to be reviewed.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if proceed != QMessageBox.StandardButton.Ok:
+            return
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Choose replacement master", "", "Images (*.png *.jpg *.jpeg *.webp)"
+        )
+        if not filename:
+            return
+        try:
+            loaded = load_image(Path(filename))
+            normalise = False
+            if loaded.original_size != self.project.canvas_size:
+                choice = self._master_size_choice(loaded.image, self.project.canvas_size)
+                if choice == "choose":
+                    self.replace_master_dialog()
+                    return
+                if choice == "cancel":
+                    return
+                normalise = choice == "normalise"
+            replace_master(
+                self.project_directory,
+                self.project,
+                Path(filename),
+                normalise_master=normalise,
+            )
+            self._activate_project(self.project_directory, self.project)
+        except (OSError, ValueError, RuntimeError, MemoryError) as error:
+            QMessageBox.critical(self, "Master could not be replaced", str(error))
+
+    def resize_current_master(self) -> None:
+        if not self.project or not self.project_directory:
+            return
+        current = self.project.resolve(self.project_directory, self.project.master_path)
+        try:
+            loaded = load_image(current)
+            if loaded.original_size == self.project.canvas_size:
+                QMessageBox.information(
+                    self, "Master already fits", "The active master already matches the canvas."
+                )
+                return
+            dialog = FitPreviewDialog(
+                loaded.image,
+                self.project.canvas_size,
+                fit_inside_transform(loaded.original_size, self.project.canvas_size),
+                apply_label="Use resized master",
+                window_title="Preview master resize",
+                subject_label="Current master",
+                parent=self,
+            )
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            replace_master(
+                self.project_directory, self.project, current, normalise_master=True
+            )
+            self._activate_project(self.project_directory, self.project)
+        except (OSError, ValueError, RuntimeError, MemoryError) as error:
+            QMessageBox.critical(self, "Master could not be resized", str(error))
 
     def _candidate_imported(self, source_name: str) -> None:
         if not self.project or not self.project_directory:

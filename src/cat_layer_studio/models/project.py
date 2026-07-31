@@ -37,6 +37,12 @@ class Project:
     key_colour: str | None = None
     candidate: CandidateState | None = None
     format_version: int = PROJECT_FORMAT_VERSION
+    master_original_path: str | None = None
+    master_working_path: str | None = None
+    master_original_size: tuple[int, int] | None = None
+    master_canvas_size: tuple[int, int] | None = None
+    master_resize_scale: float | None = None
+    master_normalisation_mode: str | None = None
 
     @property
     def canvas_size(self) -> tuple[int, int]:
@@ -60,4 +66,10 @@ class Project:
         value = dict(data)
         if value.get("candidate"):
             value["candidate"] = CandidateState.from_dict(value["candidate"])
+        for key in ("master_original_size", "master_canvas_size"):
+            if value.get(key) is not None:
+                value[key] = tuple(value[key])
+        # Legacy projects only have master_path. Keep that file as both references in memory.
+        value.setdefault("master_original_path", value.get("master_path"))
+        value.setdefault("master_working_path", value.get("master_path"))
         return cls(**value)

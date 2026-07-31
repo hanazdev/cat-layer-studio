@@ -9,20 +9,101 @@ from pathlib import Path
 
 from cat_layer_studio.constants import PROJECT_DIRECTORIES
 from cat_layer_studio.models.project import Project
+from cat_layer_studio.services.image_loader import load_image
+from cat_layer_studio.services.master_service import normalise_master_to_canvas, save_png_atomic
 
 
-def create_project(directory: Path, project: Project, master_source: Path) -> Path:
+def create_project(
+    directory: Path,
+    project: Project,
+    master_source: Path,
+    *,
+    normalise_master: bool = False,
+) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
+    if (directory / "project.json").exists():
+        raise FileExistsError("A project already exists in this directory.")
     for child in PROJECT_DIRECTORIES:
         (directory / child).mkdir(exist_ok=True)
-    master_name = f"master{master_source.suffix.lower()}"
+    loaded = load_image(master_source)
+    master_name = (
+        f"master_original{master_source.suffix.lower()}" if normalise_master
+        else f"master{master_source.suffix.lower()}"
+    )
     master_destination = directory / "source" / master_name
     if master_destination.exists():
         raise FileExistsError("A master image already exists in this project.")
-    shutil.copy2(master_source, master_destination)
-    project.master_path = master_destination.relative_to(directory).as_posix()
-    save_project(directory, project, backup=False)
+    working_destination = directory / "master" / "master_canvas.png"
+    created: list[Path] = []
+    try:
+        shutil.copy2(master_source, master_destination)
+        created.append(master_destination)
+        active = master_destination
+        scale = 1.0
+        mode = None
+        if normalise_master:
+            working, scale = normalise_master_to_canvas(loaded.image, project.canvas_size)
+            save_png_atomic(working, working_destination)
+            created.append(working_destination)
+            active = working_destination
+            mode = "fit_inside"
+        project.master_path = active.relative_to(directory).as_posix()
+        project.master_original_path = master_destination.relative_to(directory).as_posix()
+        project.master_working_path = project.master_path
+        project.master_original_size = loaded.original_size
+        project.master_canvas_size = project.canvas_size
+        project.master_resize_scale = scale
+        project.master_normalisation_mode = mode
+        save_project(directory, project, backup=False)
+    except Exception:
+        for path in reversed(created):
+            path.unlink(missing_ok=True)
+        raise
     return directory / "project.json"
+
+
+def replace_master(
+    project_directory: Path,
+    project: Project,
+    master_source: Path,
+    *,
+    normalise_master: bool,
+) -> None:
+    """Import and activate a replacement while preserving the previous master and metadata."""
+    loaded = load_image(master_source)
+    token = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    original_name = f"master_original-{token}{master_source.suffix.lower()}"
+    original = project_directory / "source" / original_name
+    working = project_directory / "master" / f"master_canvas-{token}.png"
+    old = project.to_dict()
+    created: list[Path] = []
+    try:
+        shutil.copy2(master_source, original)
+        created.append(original)
+        active = original
+        scale = 1.0
+        mode = None
+        if normalise_master:
+            image, scale = normalise_master_to_canvas(loaded.image, project.canvas_size)
+            save_png_atomic(image, working)
+            created.append(working)
+            active = working
+            mode = "fit_inside"
+        project.master_path = active.relative_to(project_directory).as_posix()
+        project.master_original_path = original.relative_to(project_directory).as_posix()
+        project.master_working_path = project.master_path
+        project.master_original_size = loaded.original_size
+        project.master_canvas_size = project.canvas_size
+        project.master_resize_scale = scale
+        project.master_normalisation_mode = mode
+        save_project(project_directory, project, backup=True)
+    except Exception:
+        restored = Project.from_dict(old)
+        for field_name in Project.__dataclass_fields__:
+            setattr(project, field_name, getattr(restored, field_name))
+        for path in reversed(created):
+            path.unlink(missing_ok=True)
+        raise
 
 
 def import_source(project_directory: Path, source: Path, label: str = "candidate") -> str:
@@ -66,6 +147,10 @@ def load_project(project_file: Path) -> tuple[Path, Project]:
     if project.format_version != 1:
         raise ValueError(f"Unsupported project format version: {project.format_version}")
     project.resolve(project_directory, project.master_path)
+    if project.master_original_path:
+        project.resolve(project_directory, project.master_original_path)
+    if project.master_working_path:
+        project.resolve(project_directory, project.master_working_path)
     if project.candidate:
         project.resolve(project_directory, project.candidate.source_path)
     return project_directory, project

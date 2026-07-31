@@ -92,18 +92,22 @@ class FitPreviewDialog(QDialog):
         transform: Transform,
         *,
         apply_label: str = "Apply fit",
+        keep_label: str = "Keep current size",
+        window_title: str = "Preview whole-image fit",
+        subject_label: str = "Original image",
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Preview whole-image fit")
+        self.setWindowTitle(window_title)
         self.setModal(True)
+        self.choice = "cancel"
         fitted_size = (
             source.width * transform.scale_x,
             source.height * transform.scale_y,
         )
 
         heading = QLabel(
-            f"Original image: {source.width} × {source.height}\n"
+            f"{subject_label}: {source.width} × {source.height}\n"
             f"Locked canvas: {canvas_size[0]} × {canvas_size[1]}\n"
             f"Suggested resize: {transform.scale_x * 100:.2f}%\n"
             f"Resulting visible bounds: approximately {fitted_size[0]:.0f} × "
@@ -160,12 +164,10 @@ class FitPreviewDialog(QDialog):
 
         buttons = QDialogButtonBox()
         self.apply_button = buttons.addButton(apply_label, QDialogButtonBox.ButtonRole.AcceptRole)
-        self.keep_button = buttons.addButton(
-            "Keep current size", QDialogButtonBox.ButtonRole.RejectRole
-        )
+        self.keep_button = buttons.addButton(keep_label, QDialogButtonBox.ButtonRole.RejectRole)
         cancel = buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
-        self.apply_button.clicked.connect(self.accept)
-        self.keep_button.clicked.connect(self.reject)
+        self.apply_button.clicked.connect(self._apply)
+        self.keep_button.clicked.connect(self._keep)
         cancel.clicked.connect(self.reject)
 
         layout = QVBoxLayout(self)
@@ -173,3 +175,11 @@ class FitPreviewDialog(QDialog):
         layout.addLayout(previews)
         layout.addWidget(explanation)
         layout.addWidget(buttons)
+
+    def _apply(self) -> None:
+        self.choice = "apply"
+        self.accept()
+
+    def _keep(self) -> None:
+        self.choice = "keep"
+        self.reject()
