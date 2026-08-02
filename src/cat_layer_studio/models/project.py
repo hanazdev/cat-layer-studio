@@ -4,7 +4,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cat_layer_studio.constants import DEFAULT_CANVAS, DEFAULT_RIG_PROFILE, PROJECT_FORMAT_VERSION
+from cat_layer_studio.constants import (
+    ASSEMBLY_FORMAT_VERSION,
+    DEFAULT_CANVAS,
+    DEFAULT_RIG_PROFILE,
+    PROJECT_FORMAT_VERSION,
+)
+from cat_layer_studio.models.assembly_layer import AssemblyLayer
 from cat_layer_studio.models.transform import Transform
 
 
@@ -43,6 +49,12 @@ class Project:
     master_canvas_size: tuple[int, int] | None = None
     master_resize_scale: float | None = None
     master_normalisation_mode: str | None = None
+    assembly_layers: list[AssemblyLayer] = field(default_factory=list)
+    assembly_format_version: int = ASSEMBLY_FORMAT_VERSION
+    godot_project_directory: str | None = None
+    godot_output_directory: str = "assets/cats/modular/adult_front_sitting"
+    godot_executable: str | None = None
+    godot_export_status: str = "Draft"
 
     @property
     def canvas_size(self) -> tuple[int, int]:
@@ -59,6 +71,7 @@ class Project:
         value = asdict(self)
         if self.candidate:
             value["candidate"] = self.candidate.to_dict()
+        value["assembly_layers"] = [layer.to_dict() for layer in self.assembly_layers]
         return value
 
     @classmethod
@@ -66,6 +79,9 @@ class Project:
         value = dict(data)
         if value.get("candidate"):
             value["candidate"] = CandidateState.from_dict(value["candidate"])
+        value["assembly_layers"] = [
+            AssemblyLayer.from_dict(layer) for layer in value.get("assembly_layers", [])
+        ]
         for key in ("master_original_size", "master_canvas_size"):
             if value.get(key) is not None:
                 value[key] = tuple(value[key])

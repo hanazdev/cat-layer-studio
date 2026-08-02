@@ -32,7 +32,10 @@ from cat_layer_studio.services.project_service import (
     save_project,
 )
 from cat_layer_studio.services.transform_service import fit_inside_transform
+from cat_layer_studio.views.component_library_view import ComponentLibraryView
+from cat_layer_studio.views.export_view import ExportView
 from cat_layer_studio.views.fit_component_view import FitComponentView
+from cat_layer_studio.views.modular_preview_view import ModularPreviewView
 from cat_layer_studio.widgets.fit_preview_dialog import FitPreviewDialog
 
 
@@ -59,6 +62,9 @@ class MainWindow(QMainWindow):
             "Use “Export approved full-canvas PNG” in Fit Component. Each result is RGBA, uses the "
             "locked project canvas, and has its fitting transform baked in for Godot at (0, 0).",
         )
+        self.library = ComponentLibraryView()
+        self.preview_view = ModularPreviewView()
+        self.export_view = ExportView()
         self.tabs.addTab(self.project_view, "1. Project")
         self.tabs.addTab(self.fit_view, "2. Fit Component")
         self.tabs.addTab(self.library, "3. Component Library")
@@ -69,6 +75,10 @@ class MainWindow(QMainWindow):
         self.fit_view.candidate_imported.connect(self._candidate_imported)
         self.fit_view.transform_committed.connect(self._transform_committed)
         self.fit_view.component_exported.connect(self._component_exported)
+        self.library.add_requested.connect(self._add_component_to_assembly)
+        self.library.library_changed.connect(self._save_assembly)
+        self.preview_view.project_changed.connect(self._save_assembly)
+        self.export_view.project_changed.connect(self._save_assembly)
         self.statusBar().showMessage("Create a project or open an existing project to begin.")
 
     def _build_project_view(self) -> QWidget:
@@ -183,9 +193,7 @@ class MainWindow(QMainWindow):
                     master_path = Path(replacement)
                     continue
                 return
-            create_project(
-                Path(directory), project, master_path, normalise_master=normalise
-            )
+            create_project(Path(directory), project, master_path, normalise_master=normalise)
             self._activate_project(Path(directory), project)
         except (OSError, ValueError, RuntimeError, MemoryError) as error:
             QMessageBox.critical(
@@ -234,6 +242,8 @@ class MainWindow(QMainWindow):
         ):
             button.setEnabled(True)
         self._refresh_library()
+        self.preview_view.set_project(directory, project)
+        self.export_view.set_project(directory, project)
         self.tabs.setCurrentWidget(self.fit_view)
         self.statusBar().showMessage(f"Opened {project.name}. The master image is locked.")
 
@@ -375,9 +385,7 @@ class MainWindow(QMainWindow):
             )
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
-            replace_master(
-                self.project_directory, self.project, current, normalise_master=True
-            )
+            replace_master(self.project_directory, self.project, current, normalise_master=True)
             self._activate_project(self.project_directory, self.project)
         except (OSError, ValueError, RuntimeError, MemoryError) as error:
             QMessageBox.critical(self, "Master could not be resized", str(error))
@@ -407,12 +415,19 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Component saved to the reusable library.")
 
     def _refresh_library(self) -> None:
-        self.library.clear()
-        if not self.project_directory:
-            self.library.addItem("Open a project to see saved components.")
+        if self.project_directory and self.project:
+            self.library.set_project(self.project_directory, self.project)
+
+    def _add_component_to_assembly(self, path: str) -> None:
+        self.preview_view.add_component(Path(path))
+        self._refresh_library()
+        self.tabs.setCurrentWidget(self.preview_view)
+        self.statusBar().showMessage(
+            "Layer added. Put it in order, fine-tune placement, then check its movement joint."
+        )
+
+    def _save_assembly(self) -> None:
+        if not self.project_directory or not self.project:
             return
-        files = sorted((self.project_directory / "components").glob("*.png"))
-        if not files:
-            self.library.addItem("No components saved yet. Finish a fit and export one.")
-        for path in files:
-            self.library.addItem(path.name)
+        save_project(self.project_directory, self.project)
+        self.library.refresh()

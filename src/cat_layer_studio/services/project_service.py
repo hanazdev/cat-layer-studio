@@ -27,7 +27,8 @@ def create_project(
         (directory / child).mkdir(exist_ok=True)
     loaded = load_image(master_source)
     master_name = (
-        f"master_original{master_source.suffix.lower()}" if normalise_master
+        f"master_original{master_source.suffix.lower()}"
+        if normalise_master
         else f"master{master_source.suffix.lower()}"
     )
     master_destination = directory / "source" / master_name
@@ -153,4 +154,6 @@ def load_project(project_file: Path) -> tuple[Path, Project]:
         project.resolve(project_directory, project.master_working_path)
     if project.candidate:
         project.resolve(project_directory, project.candidate.source_path)
+    for layer in project.assembly_layers:
+        project.resolve(project_directory, layer.texture_path)
     return project_directory, project
