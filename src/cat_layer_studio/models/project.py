@@ -87,6 +87,9 @@ class Project:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Project:
         value = dict(data)
+        legacy_animation = bool(
+            value.get("animation_set") and int(value["animation_set"].get("format_version", 1)) < 2
+        )
         if value.get("candidate"):
             value["candidate"] = CandidateState.from_dict(value["candidate"])
         value["assembly_layers"] = [
@@ -99,6 +102,9 @@ class Project:
         ]
         value.setdefault("joint_placement_format_version", JOINT_PLACEMENT_FORMAT_VERSION)
         value.setdefault("animation_verification_valid", False)
+        if legacy_animation:
+            value["animation_verification_valid"] = False
+            value["godot_export_status"] = "Needs regeneration"
         for key in ("master_original_size", "master_canvas_size"):
             if value.get(key) is not None:
                 value[key] = tuple(value[key])

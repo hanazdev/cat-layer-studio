@@ -43,7 +43,10 @@ from cat_layer_studio.services.composition_service import (
     composite_animation_frame,
     composite_assembly,
 )
-from cat_layer_studio.services.joint_placement_service import resolve_joint_placement
+from cat_layer_studio.services.joint_placement_service import (
+    prepare_movements_automatically,
+    resolve_joint_placement,
+)
 from cat_layer_studio.widgets.composite_canvas import CompositeCanvas
 
 
@@ -79,7 +82,7 @@ class AutomaticAnimationsView(QWidget):
         self.template_enabled.toggled.connect(self._enabled_changed)
         self.requirements = QLabel()
         self.requirements.setWordWrap(True)
-        self.adjust_movement_point = QPushButton("Adjust movement point…")
+        self.adjust_movement_point = QPushButton("Advanced: fine-tune movement point")
         self.adjust_movement_point.clicked.connect(self._adjust_movement_point)
         self.parameter_box = QGroupBox("3. Adjust movement")
         self.parameter_form = QFormLayout(self.parameter_box)
@@ -117,8 +120,15 @@ class AutomaticAnimationsView(QWidget):
         self.loop.toggled.connect(self._preview_options_changed)
         self.slow_motion = QCheckBox("Slow motion")
         self.slow_motion.toggled.connect(self._preview_options_changed)
-        self.compare_rest = QCheckBox("Compare with resting pose")
-        self.compare_rest.toggled.connect(lambda _checked: self._render())
+        self.compare_rest = QCheckBox("Diagnostic: overlay resting pose")
+        self.compare_rest.setChecked(False)
+        self.compare_rest.toggled.connect(self._diagnostic_overlay_toggled)
+        self.ghost_banner = QLabel(
+            "Diagnostic comparison is on. The duplicated image is the resting pose overlay, "
+            "not an animation seam."
+        )
+        self.ghost_banner.setWordWrap(True)
+        self.ghost_banner.setVisible(False)
         self.emphasise_movement = QCheckBox("Emphasise movement for checking (preview only ×4)")
         self.emphasise_movement.toggled.connect(lambda _checked: self._render())
         self.transform_debug = QCheckBox("Developer: show transform diagnostics")
@@ -145,8 +155,10 @@ class AutomaticAnimationsView(QWidget):
         self.motion_label = QLabel("Current movement: resting pose")
         self.warning = QLabel("5. Check for gaps — generate a preview to run the checks.")
         self.warning.setWordWrap(True)
-        generate = QPushButton("6. Generate animation set")
-        generate.clicked.connect(self.generate)
+        prepare = QPushButton("Prepare movements automatically")
+        prepare.clicked.connect(self.prepare_movements)
+        generate = QPushButton("Prepare animations for export")
+        generate.clicked.connect(self.prepare_for_export)
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.addWidget(QLabel("4. Preview"))
@@ -156,11 +168,13 @@ class AutomaticAnimationsView(QWidget):
         preview_layout.addWidget(self.scrubber)
         preview_layout.addWidget(self.time_label)
         preview_layout.addWidget(self.motion_label)
+        preview_layout.addWidget(self.ghost_banner)
         preview_layout.addWidget(self.emphasise_movement)
         preview_layout.addWidget(self.transform_debug)
         preview_layout.addWidget(self.show_joints)
         preview_layout.addWidget(self.show_extents)
         preview_layout.addWidget(self.warning)
+        preview_layout.addWidget(prepare)
         preview_layout.addWidget(generate)
         preview_layout.addWidget(
             QLabel(
@@ -205,7 +219,9 @@ class AutomaticAnimationsView(QWidget):
         self.history.reset(project.animation_set)
         self.templates.clear()
         for definition in TEMPLATE_DEFINITIONS:
-            status = project.animation_set.compatibility_status.get(definition.template_id, "Ready")
+            status = project.animation_set.preview_status.get(
+                definition.template_id, "Preview ready"
+            )
             marker = status
             self.templates.addItem(f"{definition.label} — {marker}")
         self.rig_status.setText(
@@ -227,18 +243,24 @@ class AutomaticAnimationsView(QWidget):
         settings = self._settings()
         if not settings or not self.project or not self.project.animation_set:
             return
-        status = self.project.animation_set.compatibility_status.get(settings.template_id, "Ready")
+        status = self.project.animation_set.preview_status.get(
+            settings.template_id, "Preview ready"
+        )
         self.template_enabled.blockSignals(True)
         self.template_enabled.setChecked(settings.enabled)
-        self.template_enabled.setEnabled(status in {"Ready", "Ready with unreviewed suggestion"})
+        self.template_enabled.setEnabled(status in {"Preview ready", "Preview using suggestion"})
         self.template_enabled.blockSignals(False)
         definition = next(
             item for item in TEMPLATE_DEFINITIONS if item.template_id == settings.template_id
         )
         requirements = [*definition.required_joints, *definition.required_assets]
+        export_readiness = self.project.animation_set.export_status.get(
+            settings.template_id, "Needs automatic preparation"
+        )
         self.requirements.setText(
             f"{definition.description}\nRequired: {', '.join(requirements) or 'current rig'}\n"
-            f"Status: {status}"
+            f"Preview: {status}\nExport: "
+            f"{export_readiness}"
         )
         movement_joint = self._movement_joint(settings.template_id)
         self.adjust_movement_point.setVisible(movement_joint is not None)
@@ -347,6 +369,34 @@ class AutomaticAnimationsView(QWidget):
             self.project.animation_set.preview_speed = 0.25 if self.slow_motion.isChecked() else 1.0
             self.project_changed.emit()
 
+    def _diagnostic_overlay_toggled(self, checked: bool) -> None:
+        self.ghost_banner.setVisible(checked)
+        self._render()
+
+    def prepare_movements(self) -> None:
+        if not self.project or not self.project_directory or not self.project.animation_set:
+            return
+        result = prepare_movements_automatically(self.project_directory, self.project)
+        update_compatibility(self.project.animation_set, self.project)
+        self.project_changed.emit()
+        self.generate()
+        self.warning.setText(result.summary)
+
+    def prepare_for_export(self) -> None:
+        if not self.project or not self.project_directory or not self.project.animation_set:
+            return
+        preparation = prepare_movements_automatically(self.project_directory, self.project)
+        generated, warnings = generate_animation_set(self.project, purpose="export")
+        passed = "\n".join(f"{item.name} — Passed" for item in generated)
+        blocked = "\n".join(f"{name} — {reason}" for name, reason in warnings.items())
+        heading = "Ready to export" if not warnings else "Export preparation needs attention"
+        self.warning.setText(
+            f"{heading}\n\n{passed}"
+            + (f"\n{blocked}" if blocked else "")
+            + f"\n\n{preparation.summary}"
+        )
+        self.project_changed.emit()
+
     def _parameter_changed(self, key: str, value: object) -> None:
         if not (settings := self._settings()):
             return
@@ -392,7 +442,9 @@ class AutomaticAnimationsView(QWidget):
         if not self.project:
             return
         selected = self.animation_choice.currentText()
-        self.generated_animations, warnings = generate_animation_set(self.project)
+        self.generated_animations, warnings = generate_animation_set(
+            self.project, purpose="preview"
+        )
         self.animation_choice.blockSignals(True)
         self.animation_choice.clear()
         self.animation_choice.addItems([item.name for item in self.generated_animations])

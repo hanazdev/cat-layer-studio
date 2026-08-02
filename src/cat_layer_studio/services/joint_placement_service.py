@@ -35,6 +35,24 @@ class MovementDiagnostic:
     outside_pixels: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class MovementPreparationResult:
+    prepared: tuple[str, ...]
+    needs_review: tuple[str, ...]
+    missing_artwork: tuple[str, ...]
+    not_supported: tuple[str, ...]
+
+    @property
+    def summary(self) -> str:
+        return (
+            "Movement preparation complete\n\n"
+            f"{len(self.prepared)} movements prepared automatically\n"
+            f"{len(self.needs_review)} movements need review\n"
+            f"{len(self.missing_artwork)} animations are missing artwork\n"
+            f"{len(self.not_supported)} animations are not supported by this rig"
+        )
+
+
 def _joint(template: RigTemplate, joint_name: str) -> RigJoint:
     try:
         return next(item for item in template.joints if item.name == joint_name)
@@ -282,8 +300,79 @@ def accept_joint_placement(project: Project, joint_name: str) -> JointPlacement:
     if placement is None:
         raise ValueError(f"No movement point exists for {joint_name}.")
     placement.approved = True
+    placement.last_approved_x = placement.x
+    placement.last_approved_y = placement.y
     placement.source = "user" if placement.source != "template" else "template"
     return placement
+
+
+def restore_last_approved_placement(project: Project, joint_name: str) -> JointPlacement:
+    placement = placement_for(project, joint_name)
+    if placement is None or placement.last_approved_x is None or placement.last_approved_y is None:
+        raise ValueError(f"No previously approved movement point exists for {joint_name}.")
+    placement.x, placement.y = placement.last_approved_x, placement.last_approved_y
+    placement.approved = True
+    placement.source = "user"
+    return placement
+
+
+def prepare_movements_automatically(
+    project_directory: Path, project: Project
+) -> MovementPreparationResult:
+    """Prepare all enabled independent movements, preserving every user-approved point."""
+    from cat_layer_studio.services.animation_service import (
+        compatibility_message,
+        required_movement_joints,
+    )
+
+    if project.animation_set is None:
+        return MovementPreparationResult((), (), (), ())
+    prepared: set[str] = set()
+    review: set[str] = set()
+    missing: set[str] = set()
+    unsupported: set[str] = set()
+    for settings in project.animation_set.templates:
+        message = compatibility_message(settings, project)
+        if message:
+            (unsupported if settings.template_id.startswith("ear_twitch") else missing).add(
+                settings.template_id
+            )
+            continue
+        if not settings.enabled:
+            continue
+        for joint_name in required_movement_joints(settings):
+            placement = placement_for(project, joint_name)
+            if placement is not None and placement.approved:
+                minimum, maximum = find_safe_rotation_range(
+                    project_directory, project, joint_name
+                )
+                if minimum < 0 < maximum:
+                    placement.validation_status = "valid"
+                    prepared.add(joint_name)
+                else:
+                    placement.validation_status = "needs_attention"
+                    review.add(joint_name)
+                continue
+            placement = update_suggestion(project_directory, project, joint_name)
+            minimum, maximum = find_safe_rotation_range(project_directory, project, joint_name)
+            seam_safe = minimum < 0 < maximum
+            if placement.confidence == "high" and seam_safe:
+                placement.validation_status = "valid"
+                placement.approved = True
+                placement.source = "automatic"
+                placement.last_approved_x = placement.x
+                placement.last_approved_y = placement.y
+                prepared.add(joint_name)
+            else:
+                placement.validation_status = "valid" if seam_safe else "needs_attention"
+                review.add(joint_name)
+    project.animation_verification_valid = False
+    return MovementPreparationResult(
+        tuple(sorted(prepared)),
+        tuple(sorted(review)),
+        tuple(sorted(missing)),
+        tuple(sorted(unsupported)),
+    )
 
 
 def _rotate_mask(mask: np.ndarray, angle: float, pivot: tuple[float, float]) -> np.ndarray:

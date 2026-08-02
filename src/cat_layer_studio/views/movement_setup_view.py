@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -66,8 +67,8 @@ class MovementSetupView(QWidget):
         heading = QLabel("Movement Setup")
         heading.setStyleSheet("font-size: 20px; font-weight: 600")
         intro = QLabel(
-            "The movement point is the spot a part turns around. Move the dot to the real "
-            "attachment area, then preview the movement."
+            "The app placed this movement point inside the part attachment. Preview the "
+            "movement below. If it looks correct, choose Accept."
         )
         intro.setWordWrap(True)
         self.joint_choice = QComboBox()
@@ -85,7 +86,6 @@ class MovementSetupView(QWidget):
             lambda value: self._numeric_changed(self.x_value.value(), value)
         )
         form = QFormLayout()
-        form.addRow("Moving part", self.joint_choice)
         form.addRow("Movement point X", self.x_value)
         form.addRow("Movement point Y", self.y_value)
 
@@ -102,7 +102,7 @@ class MovementSetupView(QWidget):
         reset_all = QPushButton("Reset all joints")
         undo = QPushButton("Undo")
         redo = QPushButton("Redo")
-        accept = QPushButton("Accept movement point")
+        accept = QPushButton("Accept suggestion")
         reset_suggestion.clicked.connect(self.reset_to_suggestion)
         reset_template.clicked.connect(self.reset_to_template)
         reset_all.clicked.connect(self.reset_all)
@@ -118,12 +118,18 @@ class MovementSetupView(QWidget):
         editor = QWidget()
         editor_layout = QVBoxLayout(editor)
         editor_layout.addWidget(QLabel("1. Choose the moving part"))
-        editor_layout.addLayout(form)
+        editor_layout.addWidget(self.joint_choice)
         editor_layout.addWidget(self.connection)
         editor_layout.addWidget(self.confidence)
-        editor_layout.addWidget(QLabel("2. Drag the orange point or nudge it"))
-        editor_layout.addLayout(nudge)
-        editor_layout.addLayout(edit_actions)
+        advanced = QGroupBox("Advanced: fine-tune movement point")
+        advanced.setCheckable(True)
+        advanced.setChecked(False)
+        advanced_layout = QVBoxLayout(advanced)
+        advanced_layout.addLayout(form)
+        advanced_layout.addWidget(QLabel("Drag the orange point or nudge it"))
+        advanced_layout.addLayout(nudge)
+        advanced_layout.addLayout(edit_actions)
+        editor_layout.addWidget(advanced)
         editor_layout.addStretch()
 
         self.canvas = CompositeCanvas()
@@ -154,9 +160,15 @@ class MovementSetupView(QWidget):
         self.slow = QCheckBox("Slow motion")
         self.loop = QCheckBox("Loop")
         self.loop.setChecked(True)
-        self.ghost = QCheckBox("Show rest-pose ghost")
-        self.ghost.setChecked(True)
-        self.ghost.toggled.connect(lambda _checked: self._render())
+        self.ghost = QCheckBox("Diagnostic: overlay resting pose")
+        self.ghost.setChecked(False)
+        self.ghost.toggled.connect(self._ghost_toggled)
+        self.ghost_banner = QLabel(
+            "Diagnostic comparison is on. The duplicated image is the resting pose overlay, "
+            "not an animation seam."
+        )
+        self.ghost_banner.setWordWrap(True)
+        self.ghost_banner.setVisible(False)
         self.points = QCheckBox("Show movement points")
         self.points.setChecked(True)
         self.points.toggled.connect(lambda _checked: self._render())
@@ -180,6 +192,13 @@ class MovementSetupView(QWidget):
         preview_layout.addWidget(self.timeline)
         preview_layout.addLayout(test_form)
         preview_layout.addWidget(self.ghost)
+        preview_layout.addWidget(self.ghost_banner)
+        preview_layout.addWidget(
+            QLabel(
+                "Orange dot — current movement point   Blue circle — suggested point\n"
+                "Pink area — where the two parts overlap   Grey outline — resting pose comparison"
+            )
+        )
         preview_layout.addWidget(self.points)
         preview_layout.addWidget(self.extents)
         preview_layout.addWidget(find_safe)
@@ -451,6 +470,10 @@ class MovementSetupView(QWidget):
 
     def play(self) -> None:
         self.timer.start()
+
+    def _ghost_toggled(self, checked: bool) -> None:
+        self.ghost_banner.setVisible(checked)
+        self._render()
 
     def pause(self) -> None:
         self.timer.stop()

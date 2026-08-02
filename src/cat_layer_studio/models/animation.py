@@ -67,6 +67,8 @@ class AnimationSet:
     preview_speed: float = 1.0
     preview_loop: bool = True
     compatibility_status: dict[str, str] = field(default_factory=dict)
+    preview_status: dict[str, str] = field(default_factory=dict)
+    export_status: dict[str, str] = field(default_factory=dict)
     last_successful_export: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -77,24 +79,42 @@ class AnimationSet:
             "preview_speed": self.preview_speed,
             "preview_loop": self.preview_loop,
             "compatibility_status": dict(self.compatibility_status),
+            "preview_status": dict(self.preview_status),
+            "export_status": dict(self.export_status),
             "last_successful_export": self.last_successful_export,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AnimationSet:
         format_version = int(data.get("format_version", ANIMATION_FORMAT_VERSION))
-        if format_version != ANIMATION_FORMAT_VERSION:
+        if format_version not in {1, ANIMATION_FORMAT_VERSION}:
             raise ValueError(f"Unsupported animation format version: {format_version}")
+        templates = [
+            AnimationTemplateSettings.from_dict(item) for item in data.get("templates", [])
+        ]
+        if format_version < 2:
+            # Version 1 stored obsolete template defaults as though they were user choices.
+            for template in templates:
+                if template.template_id in {"idle_breathing", "happy_bounce"}:
+                    template.parameters["head_movement"] = False
+                if template.template_id == "happy_bounce":
+                    template.parameters["move_ears_too"] = False
+                if template.template_id.startswith("ear_twitch_"):
+                    template.enabled = False
         return cls(
             rig_profile=str(data.get("rig_profile", "adult_front_sitting")),
-            templates=[
-                AnimationTemplateSettings.from_dict(item) for item in data.get("templates", [])
-            ],
-            format_version=format_version,
+            templates=templates,
+            format_version=ANIMATION_FORMAT_VERSION,
             preview_speed=float(data.get("preview_speed", 1.0)),
             preview_loop=bool(data.get("preview_loop", True)),
-            compatibility_status=dict(data.get("compatibility_status", {})),
-            last_successful_export=data.get("last_successful_export"),
+            compatibility_status={}
+            if format_version < 2
+            else dict(data.get("compatibility_status", {})),
+            preview_status={} if format_version < 2 else dict(data.get("preview_status", {})),
+            export_status={} if format_version < 2 else dict(data.get("export_status", {})),
+            last_successful_export=None
+            if format_version < 2
+            else data.get("last_successful_export"),
         )
 
 

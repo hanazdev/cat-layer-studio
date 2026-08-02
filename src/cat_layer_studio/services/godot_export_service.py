@@ -8,10 +8,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from PIL import Image
+
 from cat_layer_studio.models.animation import GeneratedAnimation, GeneratedTrack
 from cat_layer_studio.models.assembly_layer import AssemblyLayer
 from cat_layer_studio.models.project import Project
 from cat_layer_studio.models.rig_template import get_rig_template
+from cat_layer_studio.services.alpha_transform_service import normalise_rgba_for_transform
+from cat_layer_studio.services.animation_inspection_service import inspect_rendered_attachment
 from cat_layer_studio.services.animation_service import (
     discover_eye_assets,
     generate_animation_set,
@@ -493,7 +497,8 @@ def export_godot_rig(
                 counter += 1
             used_names.add(name.lower())
             texture_names[layer.id] = name
-            shutil.copy2(project.resolve(project_directory, layer.texture_path), textures / name)
+            with Image.open(project.resolve(project_directory, layer.texture_path)) as source:
+                normalise_rgba_for_transform(source).save(textures / name)
             texture_res_paths[layer.id] = (
                 f"res://{output_relative.replace(os.sep, '/').strip('/')}/textures/{name}"
             )
@@ -515,6 +520,33 @@ def export_godot_rig(
         animations, animation_warnings = generate_animation_set(
             project, asset_node_paths=eye_node_paths
         )
+        template = get_rig_template(project.rig_profile)
+        attachment_map = {
+            layer.attachment_joint or template.attachment_map.get(layer.slot, "Root")
+            for layer in layers
+            if layer.visible
+        }
+        verified_animations: list[GeneratedAnimation] = []
+        for animation in animations:
+            failure: str | None = None
+            for joint_name in animation.required_joints:
+                joint = next(item for item in template.joints if item.name == joint_name)
+                if joint_name not in attachment_map or joint.parent not in attachment_map:
+                    continue
+                for time in maximum_extent_times(animation):
+                    diagnostic = inspect_rendered_attachment(
+                        project_directory, project, animation, joint_name, time
+                    )
+                    if diagnostic.status in {"gap", "fringe"}:
+                        failure = diagnostic.message
+                        break
+                if failure:
+                    break
+            if failure:
+                animation_warnings[animation.template_id] = f"Verification failed: {failure}"
+            else:
+                verified_animations.append(animation)
+        animations = verified_animations
         (staging / animation_library_name).write_text(
             _animation_library_text(animations), encoding="utf-8", newline="\n"
         )

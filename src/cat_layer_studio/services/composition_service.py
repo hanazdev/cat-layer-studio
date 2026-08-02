@@ -9,6 +9,10 @@ from cat_layer_studio.models.animation import GeneratedAnimation
 from cat_layer_studio.models.assembly_layer import AssemblyLayer
 from cat_layer_studio.models.project import Project
 from cat_layer_studio.models.rig_template import get_rig_template
+from cat_layer_studio.services.alpha_transform_service import (
+    normalise_rgba_for_transform,
+    transform_premultiplied_rgba,
+)
 from cat_layer_studio.services.animation_service import sample_track
 from cat_layer_studio.services.joint_placement_service import resolve_joint_placement
 from cat_layer_studio.services.rig_hierarchy_service import evaluate_joint_matrices
@@ -39,7 +43,7 @@ def composite_assembly(
             continue
         path = project.resolve(project_directory, layer.texture_path)
         with Image.open(path) as opened:
-            image = opened.convert("RGBA")
+            image = normalise_rgba_for_transform(opened)
         if image.size != project.canvas_size:
             raise ValueError(f"{layer.display_name} does not match the project canvas.")
         if layer.opacity < 1:
@@ -49,21 +53,28 @@ def composite_assembly(
             image.putalpha(alpha)
         # Pillow's integer paste anchor is deterministic. Sub-pixel offsets use an affine
         # transform so preview and exported Godot coordinates retain the exact decimal values.
-        translated = image.transform(
-            project.canvas_size,
-            Image.Transform.AFFINE,
-            (1, 0, -layer.offset_x, 0, 1, -layer.offset_y),
-            resample=Image.Resampling.BICUBIC,
+        translated = transform_premultiplied_rgba(
+            image, (1, 0, -layer.offset_x, 0, 1, -layer.offset_y), project.canvas_size
         )
         if layer.id == rotation_layer_id and rotation_degrees:
             joint_name = layer.attachment_joint or get_rig_template(
                 project.rig_profile
             ).attachment_map.get(layer.slot, "Root")
             pivot = resolve_joint_placement(project, joint_name)
-            translated = translated.rotate(
-                -rotation_degrees,
-                center=pivot,
-                resample=Image.Resampling.BICUBIC,
+            angle = math.radians(rotation_degrees)
+            cosine, sine = math.cos(angle), math.sin(angle)
+            px, py = pivot
+            translated = transform_premultiplied_rgba(
+                translated,
+                (
+                    cosine,
+                    -sine,
+                    px - cosine * px + sine * py,
+                    sine,
+                    cosine,
+                    py - sine * px - cosine * py,
+                ),
+                project.canvas_size,
             )
         output.alpha_composite(translated)
     return output
@@ -95,6 +106,7 @@ def composite_animation_frame(
     output = Image.new("RGBA", project.canvas_size, (0, 0, 0, 0))
     diagnostic_alphas: dict[str, Image.Image] = {}
     original_head_bounds: tuple[int, int, int, int] | None = None
+    render_layers: list[tuple[AssemblyLayer, Image.Image, object]] = []
     for layer in ordered_layers(project.assembly_layers):
         visible = layer.visible and not _closed_eye_at_rest(layer)
         fallback_path = f"Visuals/{layer.id}"
@@ -103,7 +115,7 @@ def composite_animation_frame(
         if not visible:
             continue
         with Image.open(project.resolve(project_directory, layer.texture_path)) as opened:
-            image = opened.convert("RGBA")
+            image = normalise_rgba_for_transform(opened)
         if image.size != project.canvas_size:
             raise ValueError(f"{layer.display_name} does not match the project canvas.")
         if layer.opacity < 1:
@@ -123,17 +135,57 @@ def composite_animation_frame(
         if joint not in rest_world:
             joint = "Root"
         delta = animated_world[joint] @ rest_world[joint].inverse()
-        source_to_output = delta @ type(delta)(tx=layer.offset_x, ty=layer.offset_y)
-        inverse = source_to_output.inverse()
-        image = image.transform(
-            project.canvas_size,
-            Image.Transform.AFFINE,
-            (inverse.xx, inverse.yx, inverse.tx, inverse.xy, inverse.yy, inverse.ty),
-            resample=Image.Resampling.BICUBIC,
+        render_layers.append((layer, image, delta))
+
+    # Layers with the same effective delta are first assembled at rest, then filtered
+    # once.  Connected descendants therefore cannot acquire relative sampling seams.
+    groups: list[list[tuple[AssemblyLayer, Image.Image, object]]] = []
+    previous_key: tuple[float, ...] | None = None
+    for item in render_layers:
+        delta = item[2]
+        key = tuple(
+            round(value, 10)
+            for value in (delta.xx, delta.xy, delta.yx, delta.yy, delta.tx, delta.ty)
         )
-        if debug_overlay and layer.slot in {"head", "body"}:
-            diagnostic_alphas[layer.slot] = image.getchannel("A")
-        output.alpha_composite(image)
+        # Split non-contiguous matches so an independently moving layer can never be
+        # reordered across another visual. Connected rig parts remain a single run.
+        if key != previous_key:
+            groups.append([])
+            previous_key = key
+        groups[-1].append(item)
+    for items in groups:
+        rest_group = Image.new("RGBA", project.canvas_size, (0, 0, 0, 0))
+        for layer, source, _delta in items:
+            placed = transform_premultiplied_rgba(
+                source, (1, 0, -layer.offset_x, 0, 1, -layer.offset_y), project.canvas_size
+            )
+            rest_group.alpha_composite(placed)
+        delta = items[0][2]
+        inverse = delta.inverse()
+        rendered = transform_premultiplied_rgba(
+            rest_group,
+            (inverse.xx, inverse.yx, inverse.tx, inverse.xy, inverse.yy, inverse.ty),
+            project.canvas_size,
+        )
+        if debug_overlay:
+            for layer, source, _delta in items:
+                if layer.slot in {"head", "body"}:
+                    source_to_output = delta @ type(delta)(tx=layer.offset_x, ty=layer.offset_y)
+                    part_inverse = source_to_output.inverse()
+                    part = transform_premultiplied_rgba(
+                        source,
+                        (
+                            part_inverse.xx,
+                            part_inverse.yx,
+                            part_inverse.tx,
+                            part_inverse.xy,
+                            part_inverse.yy,
+                            part_inverse.ty,
+                        ),
+                        project.canvas_size,
+                    )
+                    diagnostic_alphas[layer.slot] = part.getchannel("A")
+        output.alpha_composite(rendered)
     if debug_overlay:
         draw = ImageDraw.Draw(output)
         for joint in template.joints:

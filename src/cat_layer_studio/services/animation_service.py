@@ -265,50 +265,58 @@ def compatibility_message(
     return None
 
 
-def readiness_status(settings: AnimationTemplateSettings, project: Project) -> str:
-    """Beginner-facing readiness based on artwork and reviewed movement points."""
+def required_movement_joints(settings: AnimationTemplateSettings) -> tuple[str, ...]:
+    if settings.template_id.startswith("head_tilt"):
+        return ("Head",)
+    if settings.template_id == "tail_sway":
+        return ("Tail",)
+    if settings.template_id in {"idle_breathing", "happy_bounce"}:
+        return ("Head",) if bool(settings.parameters.get("head_movement", False)) else ()
+    return ()
+
+
+def preview_status(settings: AnimationTemplateSettings, project: Project) -> str:
     message = compatibility_message(settings, project)
     if message:
         return (
-            "Not supported by this artwork"
-            if settings.template_id.startswith("ear_twitch")
-            else "Missing artwork"
+            "Not supported" if settings.template_id.startswith("ear_twitch") else "Missing artwork"
         )
-    if settings.template_id == "blink":
-        return "Ready"
-    required: tuple[str, ...]
-    if settings.template_id.startswith("head_tilt"):
-        required = ("Head",)
-    elif settings.template_id == "tail_sway":
-        required = ("Tail",)
-    elif (
-        settings.template_id == "idle_breathing"
-        and bool(settings.parameters.get("head_movement", False))
-        or settings.template_id == "happy_bounce"
-        and bool(settings.parameters.get("head_movement", False))
-    ):
-        required = ("Head",)
-    else:
-        required = ()
-    for joint_name in required:
+    for joint_name in required_movement_joints(settings):
         placement = placement_for(project, joint_name)
         if placement is None or not placement.approved:
-            return "Needs movement-point review"
-        if joint_name == "Head" and placement.validation_status != "valid":
-            return "Needs movement-point review"
-    if required:
-        return "Ready"
-    movable = settings.template_id in {"idle_breathing", "happy_bounce"}
-    if movable and not (placement_for(project, "Body") and placement_for(project, "Body").approved):
-        return "Ready with unreviewed suggestion"
-    return "Ready"
+            return "Preview using suggestion"
+    return "Preview ready"
+
+
+def export_status(settings: AnimationTemplateSettings, project: Project) -> str:
+    preview = preview_status(settings, project)
+    if preview in {"Missing artwork", "Not supported", "Generation error"}:
+        return preview
+    for joint_name in required_movement_joints(settings):
+        placement = placement_for(project, joint_name)
+        if placement is not None and placement.approved and placement.validation_status == "valid":
+            continue
+        if placement is None or placement.suggestion_x is None:
+            return "Needs automatic preparation"
+        return "Needs user review"
+    return "Ready for export"
+
+
+def readiness_status(settings: AnimationTemplateSettings, project: Project) -> str:
+    """Compatibility alias for callers that only display preview readiness."""
+    return preview_status(settings, project)
 
 
 def update_compatibility(animation_set: AnimationSet, project: Project) -> dict[str, str]:
-    animation_set.compatibility_status = {
-        settings.template_id: readiness_status(settings, project)
+    animation_set.preview_status = {
+        settings.template_id: preview_status(settings, project)
         for settings in animation_set.templates
     }
+    animation_set.export_status = {
+        settings.template_id: export_status(settings, project)
+        for settings in animation_set.templates
+    }
+    animation_set.compatibility_status = dict(animation_set.preview_status)
     return animation_set.compatibility_status
 
 
@@ -338,16 +346,22 @@ def generate_animation(
     *,
     asset_node_paths: dict[str, str] | None = None,
     available_joints: set[str] | None = None,
+    purpose: str = "export",
 ) -> GeneratedAnimation:
     message = compatibility_message(settings, project, available_joints=available_joints)
     if message:
         raise AnimationCompatibilityError(message)
-    status = readiness_status(settings, project)
-    if status in {
-        "Needs movement-point review",
-        "Not supported by this artwork",
-        "Missing artwork",
-    }:
+    if purpose not in {"preview", "export"}:
+        raise ValueError("purpose must be 'preview' or 'export'")
+    status = (
+        preview_status(settings, project)
+        if purpose == "preview"
+        else export_status(settings, project)
+    )
+    blocking = {"Missing artwork", "Not supported", "Generation error"}
+    if purpose == "export":
+        blocking |= {"Needs automatic preparation", "Needs user review", "Verification failed"}
+    if status in blocking:
         raise AnimationCompatibilityError(status)
     definition = _definition(settings.template_id)
     template = get_rig_template(project.rig_profile)
@@ -534,13 +548,23 @@ def generate_animation_set(
     project: Project,
     *,
     asset_node_paths: dict[str, str] | None = None,
+    purpose: str = "export",
 ) -> tuple[list[GeneratedAnimation], dict[str, str]]:
     animation_set = project.animation_set or default_animation_set(project.rig_profile)
     project.animation_set = animation_set
-    statuses = update_compatibility(animation_set, project)
-    blocking = {"Needs movement-point review", "Not supported by this artwork", "Missing artwork"}
+    update_compatibility(animation_set, project)
+    blocking = {"Missing artwork", "Not supported", "Generation error"}
+    status_map = (
+        animation_set.preview_status if purpose == "preview" else animation_set.export_status
+    )
+    if purpose == "export":
+        blocking |= {"Needs automatic preparation", "Needs user review", "Verification failed"}
     warnings = {
-        template_id: status for template_id, status in statuses.items() if status in blocking
+        template_id: status for template_id, status in status_map.items() if status in blocking
+    }
+    warnings = {
+        template_id: ("Not supported by this artwork" if status == "Not supported" else status)
+        for template_id, status in warnings.items()
     }
     generated: list[GeneratedAnimation] = []
     for settings in animation_set.templates:
@@ -550,7 +574,9 @@ def generate_animation_set(
             continue
         try:
             generated.append(
-                generate_animation(settings, project, asset_node_paths=asset_node_paths)
+                generate_animation(
+                    settings, project, asset_node_paths=asset_node_paths, purpose=purpose
+                )
             )
         except AnimationCompatibilityError as error:
             warnings[settings.template_id] = str(error)

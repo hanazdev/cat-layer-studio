@@ -19,6 +19,8 @@ class JointPlacement:
     safe_rotation_max: float | None = None
     validation_status: str = "not_checked"
     suggestion_reason: str = ""
+    last_approved_x: float | None = None
+    last_approved_y: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

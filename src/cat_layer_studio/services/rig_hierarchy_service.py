@@ -132,3 +132,27 @@ def evaluate_joint_matrices(
             rest_world[joint.name] = rest_world[joint.parent] @ rest_local
             animated_world[joint.name] = animated_world[joint.parent] @ animated_local
     return rest_world, animated_world
+
+
+def layer_rest_world_transform(project: Project, layer_id: str) -> Affine2D:
+    layer = next(item for item in project.assembly_layers if item.id == layer_id)
+    rest, _animated = evaluate_joint_matrices(project)
+    joint = layer.attachment_joint or "Root"
+    return rest.get(joint, rest["Root"]) @ Affine2D(tx=layer.offset_x, ty=layer.offset_y)
+
+
+def layer_animated_world_transform(
+    project: Project, layer_id: str, animation: GeneratedAnimation, time: float
+) -> Affine2D:
+    layer = next(item for item in project.assembly_layers if item.id == layer_id)
+    _rest, animated = evaluate_joint_matrices(project, animation, time)
+    joint = layer.attachment_joint or "Root"
+    return animated.get(joint, animated["Root"]) @ Affine2D(tx=layer.offset_x, ty=layer.offset_y)
+
+
+def layer_delta_transform(
+    project: Project, layer_id: str, animation: GeneratedAnimation, time: float
+) -> Affine2D:
+    return layer_animated_world_transform(project, layer_id, animation, time) @ (
+        layer_rest_world_transform(project, layer_id).inverse()
+    )
