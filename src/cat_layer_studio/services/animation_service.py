@@ -13,6 +13,11 @@ from cat_layer_studio.models.animation import (
 )
 from cat_layer_studio.models.project import Project
 from cat_layer_studio.models.rig_template import RigTemplate, get_rig_template
+from cat_layer_studio.services.joint_placement_service import placement_for
+from cat_layer_studio.services.rig_hierarchy_service import (
+    configured_joint_pivots,
+    local_rest_positions,
+)
 
 
 class AnimationCompatibilityError(ValueError):
@@ -30,6 +35,7 @@ class TemplateDefinition:
     default_duration: float
     default_loop: bool
     default_parameters: dict[str, float | int | bool | str]
+    default_enabled: bool = True
 
 
 TEMPLATE_DEFINITIONS: tuple[TemplateDefinition, ...] = (
@@ -42,7 +48,7 @@ TEMPLATE_DEFINITIONS: tuple[TemplateDefinition, ...] = (
         (),
         1.6,
         True,
-        {"speed": "Normal", "breathing_amount": "Subtle", "head_movement": True},
+        {"speed": "Normal", "breathing_amount": "Normal", "head_movement": False},
     ),
     TemplateDefinition(
         "tail_sway",
@@ -70,6 +76,7 @@ TEMPLATE_DEFINITIONS: tuple[TemplateDefinition, ...] = (
         0.45,
         False,
         {"movement_amount": "Normal", "twitch_speed": "Normal", "repeat_count": 1},
+        False,
     ),
     TemplateDefinition(
         "ear_twitch_right",
@@ -81,6 +88,7 @@ TEMPLATE_DEFINITIONS: tuple[TemplateDefinition, ...] = (
         0.45,
         False,
         {"movement_amount": "Normal", "twitch_speed": "Normal", "repeat_count": 1},
+        False,
     ),
     TemplateDefinition(
         "head_tilt_left",
@@ -118,7 +126,7 @@ TEMPLATE_DEFINITIONS: tuple[TemplateDefinition, ...] = (
         "happy_bounce",
         "happy_bounce",
         "Happy bounce",
-        "A short celebratory bounce with optional ear movement.",
+        "A short celebratory bounce which keeps the current seamless ear construction still.",
         ("Body", "Head"),
         (),
         1.0,
@@ -127,7 +135,8 @@ TEMPLATE_DEFINITIONS: tuple[TemplateDefinition, ...] = (
             "bounce_height": "Normal",
             "bounce_speed": "Normal",
             "number_of_bounces": 2,
-            "move_ears_too": True,
+            "move_ears_too": False,
+            "head_movement": False,
         },
     ),
     TemplateDefinition(
@@ -162,6 +171,7 @@ def default_template_settings(template_id: str) -> AnimationTemplateSettings:
     definition = _definition(template_id)
     return AnimationTemplateSettings(
         template_id=template_id,
+        enabled=definition.default_enabled,
         duration=definition.default_duration,
         loop=definition.default_loop,
         parameters=deepcopy(definition.default_parameters),
@@ -202,21 +212,6 @@ def _joint_paths(template: RigTemplate) -> dict[str, str]:
     return paths
 
 
-def _rest_positions(template: RigTemplate) -> dict[str, tuple[float, float]]:
-    global_positions = {joint.name: joint.suggested_pivot for joint in template.joints}
-    return {
-        joint.name: (
-            joint.suggested_pivot
-            if joint.parent is None
-            else (
-                joint.suggested_pivot[0] - global_positions[joint.parent][0],
-                joint.suggested_pivot[1] - global_positions[joint.parent][1],
-            )
-        )
-        for joint in template.joints
-    }
-
-
 def discover_eye_assets(project: Project) -> dict[str, str]:
     """Return logical eye states mapped to layer IDs, using explicit state data when present."""
     found: dict[str, str] = {}
@@ -237,6 +232,15 @@ def compatibility_message(
     available_joints: set[str] | None = None,
 ) -> str | None:
     definition = _definition(settings.template_id)
+    if (
+        settings.template_id in {"ear_twitch_left", "ear_twitch_right"}
+        and project.rig_profile == "adult_front_sitting"
+    ):
+        return (
+            "Ear twitch — Not supported by this rig artwork\n"
+            "The ear attachment is designed for a seamless static overlap, but rotating it "
+            "exposes the join."
+        )
     template = get_rig_template(project.rig_profile)
     joints = (
         available_joints
@@ -261,9 +265,48 @@ def compatibility_message(
     return None
 
 
+def readiness_status(settings: AnimationTemplateSettings, project: Project) -> str:
+    """Beginner-facing readiness based on artwork and reviewed movement points."""
+    message = compatibility_message(settings, project)
+    if message:
+        return (
+            "Not supported by this artwork"
+            if settings.template_id.startswith("ear_twitch")
+            else "Missing artwork"
+        )
+    if settings.template_id == "blink":
+        return "Ready"
+    required: tuple[str, ...]
+    if settings.template_id.startswith("head_tilt"):
+        required = ("Head",)
+    elif settings.template_id == "tail_sway":
+        required = ("Tail",)
+    elif (
+        settings.template_id == "idle_breathing"
+        and bool(settings.parameters.get("head_movement", False))
+        or settings.template_id == "happy_bounce"
+        and bool(settings.parameters.get("head_movement", False))
+    ):
+        required = ("Head",)
+    else:
+        required = ()
+    for joint_name in required:
+        placement = placement_for(project, joint_name)
+        if placement is None or not placement.approved:
+            return "Needs movement-point review"
+        if joint_name == "Head" and placement.validation_status != "valid":
+            return "Needs movement-point review"
+    if required:
+        return "Ready"
+    movable = settings.template_id in {"idle_breathing", "happy_bounce"}
+    if movable and not (placement_for(project, "Body") and placement_for(project, "Body").approved):
+        return "Ready with unreviewed suggestion"
+    return "Ready"
+
+
 def update_compatibility(animation_set: AnimationSet, project: Project) -> dict[str, str]:
     animation_set.compatibility_status = {
-        settings.template_id: compatibility_message(settings, project) or "Ready"
+        settings.template_id: readiness_status(settings, project)
         for settings in animation_set.templates
     }
     return animation_set.compatibility_status
@@ -279,7 +322,7 @@ def _track(
     path: str,
     property_name: str,
     values: list[tuple[float, object]],
-    interpolation: str = "cubic",
+    interpolation: str = "linear",
 ) -> GeneratedTrack:
     return GeneratedTrack(
         path,
@@ -299,17 +342,24 @@ def generate_animation(
     message = compatibility_message(settings, project, available_joints=available_joints)
     if message:
         raise AnimationCompatibilityError(message)
+    status = readiness_status(settings, project)
+    if status in {
+        "Needs movement-point review",
+        "Not supported by this artwork",
+        "Missing artwork",
+    }:
+        raise AnimationCompatibilityError(status)
     definition = _definition(settings.template_id)
     template = get_rig_template(project.rig_profile)
     paths = _joint_paths(template)
-    rest = _rest_positions(template)
+    rest = local_rest_positions(template, configured_joint_pivots(project, template))
     p = deepcopy(settings.parameters)
     duration = max(0.01, float(p.get("duration", settings.duration)))
     tracks: list[GeneratedTrack] = []
 
     if settings.template_id == "idle_breathing":
         amount = _amount(
-            p.get("breathing_amount"), {"subtle": 1.5, "normal": 2.5, "expressive": 4.0}, 1.5
+            p.get("breathing_amount"), {"subtle": 2.0, "normal": 4.0, "expressive": 7.0}, 4.0
         )
         x, y = rest["Body"]
         tracks.append(
@@ -327,9 +377,19 @@ def generate_animation(
                 )
             )
     elif settings.template_id == "tail_sway":
-        angle = math.radians(
-            _amount(p.get("sway_amount"), {"subtle": 4, "normal": 8, "expressive": 14}, 8)
-        )
+        requested = _amount(p.get("sway_amount"), {"subtle": 4, "normal": 8, "expressive": 14}, 8)
+        placement = placement_for(project, "Tail")
+        safe = requested
+        if (
+            placement
+            and placement.safe_rotation_min is not None
+            and placement.safe_rotation_max is not None
+        ):
+            safe = min(requested, abs(placement.safe_rotation_min), placement.safe_rotation_max)
+        p["requested_rotation_degrees"] = requested
+        p["generated_rotation_degrees"] = safe
+        p["clamped_to_safe_range"] = safe < requested
+        angle = math.radians(safe)
         if str(p.get("direction", "Left first")).lower().startswith("right"):
             angle = -angle
         pause = 0.08 * duration if bool(p.get("pause_between_sways", False)) else 0.0
@@ -370,9 +430,23 @@ def generate_animation(
         tracks.append(_track(paths[joint], "rotation", values))
     elif settings.template_id.startswith("head_tilt_"):
         sign = -1 if settings.template_id.endswith("left") else 1
-        angle = sign * math.radians(
-            _amount(p.get("tilt_amount"), {"subtle": 4, "normal": 8, "expressive": 13}, 8)
+        requested = sign * _amount(
+            p.get("tilt_amount"), {"subtle": 4, "normal": 8, "expressive": 13}, 8
         )
+        generated = requested
+        placement = placement_for(project, "Head")
+        if (
+            placement
+            and placement.safe_rotation_min is not None
+            and placement.safe_rotation_max is not None
+        ):
+            generated = max(
+                placement.safe_rotation_min, min(placement.safe_rotation_max, requested)
+            )
+        p["requested_rotation_degrees"] = requested
+        p["generated_rotation_degrees"] = generated
+        p["clamped_to_safe_range"] = generated != requested
+        angle = math.radians(generated)
         hold = min(duration * 0.7, max(0.0, float(p.get("hold_duration", 0.25))))
         attack = max(0.05, (duration - hold) * 0.45)
         tracks.append(
@@ -398,14 +472,15 @@ def generate_animation(
                 ]
             )
         tracks.append(_track(paths["Body"], "position", values))
-        tracks.append(
-            _track(
-                paths["Head"],
-                "rotation",
-                [(0, 0.0), (duration * 0.45, math.radians(2.0)), (duration, 0.0)],
+        if bool(p.get("head_movement", False)):
+            tracks.append(
+                _track(
+                    paths["Head"],
+                    "rotation",
+                    [(0, 0.0), (duration * 0.45, math.radians(2.0)), (duration, 0.0)],
+                )
             )
-        )
-        if bool(p.get("move_ears_too", True)):
+        if bool(p.get("move_ears_too", False)) and project.rig_profile != "adult_front_sitting":
             for joint, sign in (("EarScreenLeft", -1), ("EarScreenRight", 1)):
                 tracks.append(
                     _track(
@@ -462,10 +537,16 @@ def generate_animation_set(
 ) -> tuple[list[GeneratedAnimation], dict[str, str]]:
     animation_set = project.animation_set or default_animation_set(project.rig_profile)
     project.animation_set = animation_set
-    warnings: dict[str, str] = {}
+    statuses = update_compatibility(animation_set, project)
+    blocking = {"Needs movement-point review", "Not supported by this artwork", "Missing artwork"}
+    warnings = {
+        template_id: status for template_id, status in statuses.items() if status in blocking
+    }
     generated: list[GeneratedAnimation] = []
     for settings in animation_set.templates:
         if not settings.enabled:
+            continue
+        if settings.template_id in warnings:
             continue
         try:
             generated.append(
@@ -473,10 +554,6 @@ def generate_animation_set(
             )
         except AnimationCompatibilityError as error:
             warnings[settings.template_id] = str(error)
-    animation_set.compatibility_status = {
-        settings.template_id: warnings.get(settings.template_id, "Ready")
-        for settings in animation_set.templates
-    }
     return generated, warnings
 
 
@@ -525,12 +602,10 @@ def inspect_animation(project: Project, animation: GeneratedAnimation) -> list[s
     warnings: list[str] = []
     joint_names = set(animation.required_joints)
     for joint_name in joint_names:
-        attached = [
-            layer for layer in project.assembly_layers if layer.attachment_joint == joint_name
-        ]
-        if attached and any(layer.pivot_x is None or layer.pivot_y is None for layer in attached):
+        placement = placement_for(project, joint_name)
+        if placement is None or not placement.approved:
             warnings.append(
-                f"{animation.name} needs attention. A part attached to {joint_name} "
-                "is missing its pivot."
+                f"{animation.name} needs attention. The {joint_name} movement point has not "
+                "been reviewed."
             )
     return warnings

@@ -12,8 +12,15 @@ from cat_layer_studio.models.animation import GeneratedAnimation, GeneratedTrack
 from cat_layer_studio.models.assembly_layer import AssemblyLayer
 from cat_layer_studio.models.project import Project
 from cat_layer_studio.models.rig_template import get_rig_template
-from cat_layer_studio.services.animation_service import discover_eye_assets, generate_animation_set
+from cat_layer_studio.services.animation_service import (
+    discover_eye_assets,
+    generate_animation_set,
+    maximum_extent_times,
+    sample_track,
+)
 from cat_layer_studio.services.composition_service import composite_assembly, ordered_layers
+from cat_layer_studio.services.joint_placement_service import resolved_joint_placements
+from cat_layer_studio.services.rig_hierarchy_service import evaluate_joint_matrices, joint_paths
 
 SLOT_NODE_NAMES = {
     "tail": "TailVisual",
@@ -103,19 +110,19 @@ def _scene_text(
         ]
     )
     joint_paths: dict[str, str] = {}
-    joint_global = {joint.name: joint.suggested_pivot for joint in template.joints}
+    joint_global = resolved_joint_placements(project)
     for joint in template.joints:
         if joint.parent is None:
             parent = "Skeleton2D"
-            local = joint.suggested_pivot
+            local = joint_global[joint.name]
             path = "Skeleton2D/Root"
         else:
             parent_path = joint_paths[joint.parent]
             parent = parent_path
             parent_pivot = joint_global[joint.parent]
             local = (
-                joint.suggested_pivot[0] - parent_pivot[0],
-                joint.suggested_pivot[1] - parent_pivot[1],
+                joint_global[joint.name][0] - parent_pivot[0],
+                joint_global[joint.name][1] - parent_pivot[1],
             )
             path = f"{parent_path}/{joint.name}"
         joint_paths[joint.name] = path
@@ -123,7 +130,7 @@ def _scene_text(
             [
                 f'[node name="{joint.name}" type="Bone2D" parent="{parent}"]',
                 f"position = Vector2({_fmt(local[0])}, {_fmt(local[1])})",
-                "rest = Transform2D(1, 0, 0, 1, 0, 0)",
+                f"rest = Transform2D(1, 0, 0, 1, {_fmt(local[0])}, {_fmt(local[1])})",
                 "",
             ]
         )
@@ -135,33 +142,14 @@ def _scene_text(
         joint_name = layer.attachment_joint or template.attachment_map.get(layer.slot, "Root")
         if joint_name not in joint_paths:
             joint_name = "Root"
-        pivot = (
-            layer.pivot_x if layer.pivot_x is not None else joint_global[joint_name][0],
-            layer.pivot_y if layer.pivot_y is not None else joint_global[joint_name][1],
-        )
-        # When a user gives this layer a custom pivot, a private Bone2D keeps the stable template
-        # intact while making the visible part rotate around exactly the approved point.
         parent = joint_paths[joint_name]
-        if pivot != joint_global[joint_name]:
-            pivot_bone = f"{_safe_name(layer.id)}Pivot"
-            global_joint = joint_global[joint_name]
-            lines.extend(
-                [
-                    f'[node name="{pivot_bone}" type="Bone2D" parent="{parent}"]',
-                    "position = Vector2("
-                    f"{_fmt(pivot[0] - global_joint[0])}, "
-                    f"{_fmt(pivot[1] - global_joint[1])})",
-                    "rest = Transform2D(1, 0, 0, 1, 0, 0)",
-                    "",
-                ]
-            )
-            parent = f"{parent}/{pivot_bone}"
         name = _node_name(layer, used_names)
         exported_names[layer.id] = name
         exported_paths[layer.id] = f"{parent}/{name}"
         asset_state = "closed" if layer.id in closed_eye_ids else (layer.asset_state or "default")
-        local_x = canvas_centre[0] + layer.offset_x - pivot[0]
-        local_y = canvas_centre[1] + layer.offset_y - pivot[1]
+        # Full-canvas textures retain their world rest pose while the stable joint moves.
+        local_x = canvas_centre[0] + layer.offset_x - joint_global[joint_name][0]
+        local_y = canvas_centre[1] + layer.offset_y - joint_global[joint_name][1]
         lines.extend(
             [
                 f'[node name="{name}" type="Sprite2D" parent="{parent}" groups=["cat_part_slot"]]',
@@ -299,12 +287,14 @@ def _verification_script(
     preview_res_path: str,
     expected: list[dict[str, object]],
     animations: list[GeneratedAnimation],
+    expected_motion: list[dict[str, object]],
 ) -> str:
     expected_json = json.dumps(expected, separators=(",", ":"))
     animations_json = json.dumps(
         [{"name": item.name, "duration": item.duration, "loop": item.loop} for item in animations],
         separators=(",", ":"),
     )
+    motion_json = json.dumps(expected_motion, separators=(",", ":"))
     return f'''extends SceneTree
 
 func _init() -> void:
@@ -330,8 +320,41 @@ func _run() -> void:
         _fail("AnimationPlayer is missing")
         return
     var rest_pose := _snapshot_pose(rig)
+    var motion_checks = JSON.parse_string('{motion_json}')
+    for check in motion_checks:
+        rig.return_to_rest_pose()
+        rig.play_animation(check.animation)
+        player.seek(float(check.time), true)
+        var animation_resource := player.get_animation(check.animation)
+        for expected_track in check.tracks:
+            var track_path := NodePath(expected_track.path + ":" + expected_track.property)
+            var track_index := animation_resource.find_track(track_path, Animation.TYPE_VALUE)
+            if track_index < 0:
+                _fail("missing stable animation target: " + str(track_path))
+                return
+            var sampled = animation_resource.value_track_interpolate(
+                track_index, float(check.time)
+            )
+            if expected_track.property == "position":
+                var expected_value := Vector2(float(expected_track.x), float(expected_track.y))
+                if not sampled is Vector2 or sampled.distance_to(expected_value) > 0.001:
+                    _fail("Godot track sample mismatch: " + str(track_path))
+                    return
+            elif absf(float(sampled) - float(expected_track.value)) > 0.0001:
+                _fail("Godot track sample mismatch: " + str(track_path))
+                return
+        for expected_joint in check.joints:
+            var bone := rig.get_node_or_null(NodePath(expected_joint.path)) as Bone2D
+            if bone == null:
+                _fail("missing stable animation target: " + expected_joint.path)
+                return
+            var expected_position := Vector2(float(expected_joint.x), float(expected_joint.y))
+            if bone.global_position.distance_to(expected_position) > 0.001:
+                _fail("maximum-extent position mismatch: " + expected_joint.path)
+                return
     var animations = JSON.parse_string('{animations_json}')
     for animation in animations:
+        rig.return_to_rest_pose()
         if not rig.has_animation(animation.name):
             _fail("missing animation: " + animation.name)
             return
@@ -512,6 +535,7 @@ def export_godot_rig(
             "canvas_size": [project.canvas_width, project.canvas_height],
             "scene_path": scene_res_path,
             "layers": manifest_layers,
+            "joint_placements": [item.to_dict() for item in project.joint_placements],
         }
         (staging / "cat_rig_manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
@@ -549,6 +573,7 @@ def export_godot_rig(
                 for animation in animations
             ],
             "compatibility_warnings": animation_warnings,
+            "joint_placements": [item.to_dict() for item in project.joint_placements],
         }
         (staging / "cat_animation_manifest.json").write_text(
             json.dumps(animation_manifest, indent=2, sort_keys=True) + "\n",
@@ -567,9 +592,59 @@ def export_godot_rig(
             }
             for layer in layers
         ]
+        template = get_rig_template(project.rig_profile)
+        paths = joint_paths(template)
+        expected_motion: list[dict[str, object]] = []
+        for animation in animations:
+            for time in maximum_extent_times(animation):
+                _, matrices = evaluate_joint_matrices(project, animation, time)
+                active_tracks = [
+                    track
+                    for track in animation.tracks
+                    if track.property_name in {"position", "rotation"}
+                ]
+                active_joints = {
+                    joint.name
+                    for joint in template.joints
+                    if any(track.target_path == paths[joint.name] for track in active_tracks)
+                }
+                expected_motion.append(
+                    {
+                        "animation": animation.name,
+                        "time": time,
+                        "tracks": [
+                            (
+                                {
+                                    "path": track.target_path,
+                                    "property": track.property_name,
+                                    "x": sample_track(track, time)[0],
+                                    "y": sample_track(track, time)[1],
+                                }
+                                if track.property_name == "position"
+                                else {
+                                    "path": track.target_path,
+                                    "property": track.property_name,
+                                    "value": sample_track(track, time),
+                                }
+                            )
+                            for track in active_tracks
+                        ],
+                        "joints": [
+                            {
+                                "path": paths[joint.name],
+                                "x": matrices[joint.name].tx,
+                                "y": matrices[joint.name].ty,
+                            }
+                            for joint in template.joints
+                            if joint.name in active_joints
+                        ],
+                    }
+                )
         preview_res_path = f"{output_res_directory}/preview.png"
         (staging / "verify_rig.gd").write_text(
-            _verification_script(scene_res_path, preview_res_path, expected, animations),
+            _verification_script(
+                scene_res_path, preview_res_path, expected, animations, expected_motion
+            ),
             encoding="utf-8",
             newline="\n",
         )

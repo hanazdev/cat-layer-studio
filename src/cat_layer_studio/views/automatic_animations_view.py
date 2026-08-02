@@ -28,7 +28,6 @@ from cat_layer_studio.models.animation import (
     GeneratedAnimation,
 )
 from cat_layer_studio.models.project import Project
-from cat_layer_studio.models.rig_template import get_rig_template
 from cat_layer_studio.services.animation_inspection_service import inspect_animation_frames
 from cat_layer_studio.services.animation_service import (
     TEMPLATE_DEFINITIONS,
@@ -37,17 +36,20 @@ from cat_layer_studio.services.animation_service import (
     maximum_extent_times,
     reset_all_templates,
     reset_template,
+    sample_track,
     update_compatibility,
 )
 from cat_layer_studio.services.composition_service import (
     composite_animation_frame,
     composite_assembly,
 )
+from cat_layer_studio.services.joint_placement_service import resolve_joint_placement
 from cat_layer_studio.widgets.composite_canvas import CompositeCanvas
 
 
 class AutomaticAnimationsView(QWidget):
     project_changed = Signal()
+    adjust_movement_point_requested = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -77,6 +79,8 @@ class AutomaticAnimationsView(QWidget):
         self.template_enabled.toggled.connect(self._enabled_changed)
         self.requirements = QLabel()
         self.requirements.setWordWrap(True)
+        self.adjust_movement_point = QPushButton("Adjust movement point…")
+        self.adjust_movement_point.clicked.connect(self._adjust_movement_point)
         self.parameter_box = QGroupBox("3. Adjust movement")
         self.parameter_form = QFormLayout(self.parameter_box)
         reset_one = QPushButton("Reset this animation")
@@ -93,6 +97,7 @@ class AutomaticAnimationsView(QWidget):
         choose_layout.addWidget(self.templates)
         choose_layout.addWidget(self.template_enabled)
         choose_layout.addWidget(self.requirements)
+        choose_layout.addWidget(self.adjust_movement_point)
         choose_layout.addWidget(self.parameter_box)
         choose_layout.addLayout(reset_row)
 
@@ -114,6 +119,10 @@ class AutomaticAnimationsView(QWidget):
         self.slow_motion.toggled.connect(self._preview_options_changed)
         self.compare_rest = QCheckBox("Compare with resting pose")
         self.compare_rest.toggled.connect(lambda _checked: self._render())
+        self.emphasise_movement = QCheckBox("Emphasise movement for checking (preview only ×4)")
+        self.emphasise_movement.toggled.connect(lambda _checked: self._render())
+        self.transform_debug = QCheckBox("Developer: show transform diagnostics")
+        self.transform_debug.toggled.connect(lambda _checked: self._render())
         self.show_joints = QCheckBox("Show movement joints")
         self.show_joints.toggled.connect(lambda _checked: self._render())
         self.show_extents = QCheckBox("Show maximum-extents frames")
@@ -133,6 +142,7 @@ class AutomaticAnimationsView(QWidget):
         self.scrubber.setRange(0, 1000)
         self.scrubber.valueChanged.connect(self._scrubbed)
         self.time_label = QLabel("No animation generated yet")
+        self.motion_label = QLabel("Current movement: resting pose")
         self.warning = QLabel("5. Check for gaps — generate a preview to run the checks.")
         self.warning.setWordWrap(True)
         generate = QPushButton("6. Generate animation set")
@@ -145,6 +155,9 @@ class AutomaticAnimationsView(QWidget):
         preview_layout.addLayout(controls)
         preview_layout.addWidget(self.scrubber)
         preview_layout.addWidget(self.time_label)
+        preview_layout.addWidget(self.motion_label)
+        preview_layout.addWidget(self.emphasise_movement)
+        preview_layout.addWidget(self.transform_debug)
         preview_layout.addWidget(self.show_joints)
         preview_layout.addWidget(self.show_extents)
         preview_layout.addWidget(self.warning)
@@ -193,7 +206,7 @@ class AutomaticAnimationsView(QWidget):
         self.templates.clear()
         for definition in TEMPLATE_DEFINITIONS:
             status = project.animation_set.compatibility_status.get(definition.template_id, "Ready")
-            marker = "Ready" if status == "Ready" else "Needs artwork"
+            marker = status
             self.templates.addItem(f"{definition.label} — {marker}")
         self.rig_status.setText(
             f"1. Check the rig — {project.rig_profile} recognised. "
@@ -214,10 +227,11 @@ class AutomaticAnimationsView(QWidget):
         settings = self._settings()
         if not settings or not self.project or not self.project.animation_set:
             return
+        status = self.project.animation_set.compatibility_status.get(settings.template_id, "Ready")
         self.template_enabled.blockSignals(True)
         self.template_enabled.setChecked(settings.enabled)
+        self.template_enabled.setEnabled(status in {"Ready", "Ready with unreviewed suggestion"})
         self.template_enabled.blockSignals(False)
-        status = self.project.animation_set.compatibility_status.get(settings.template_id, "Ready")
         definition = next(
             item for item in TEMPLATE_DEFINITIONS if item.template_id == settings.template_id
         )
@@ -226,6 +240,8 @@ class AutomaticAnimationsView(QWidget):
             f"{definition.description}\nRequired: {', '.join(requirements) or 'current rig'}\n"
             f"Status: {status}"
         )
+        movement_joint = self._movement_joint(settings.template_id)
+        self.adjust_movement_point.setVisible(movement_joint is not None)
         self._clear_parameter_form()
         for key, value in settings.parameters.items():
             widget = self._parameter_widget(key, value)
@@ -298,6 +314,20 @@ class AutomaticAnimationsView(QWidget):
         while self.parameter_form.rowCount():
             self.parameter_form.removeRow(0)
         self.parameter_widgets.clear()
+
+    @staticmethod
+    def _movement_joint(template_id: str) -> str | None:
+        if template_id.startswith("head_tilt"):
+            return "Head"
+        if template_id == "tail_sway":
+            return "Tail"
+        if template_id in {"idle_breathing", "happy_bounce"}:
+            return "Body"
+        return None
+
+    def _adjust_movement_point(self) -> None:
+        if (settings := self._settings()) and (joint := self._movement_joint(settings.template_id)):
+            self.adjust_movement_point_requested.emit(joint)
 
     def _commit(self) -> None:
         if self.project and self.project.animation_set:
@@ -444,7 +474,12 @@ class AutomaticAnimationsView(QWidget):
                 composite_assembly(self.project_directory, self.project)
                 if rest or animation is None
                 else composite_animation_frame(
-                    self.project_directory, self.project, animation, self.current_time
+                    self.project_directory,
+                    self.project,
+                    animation,
+                    self.current_time,
+                    movement_scale=4.0 if self.emphasise_movement.isChecked() else 1.0,
+                    debug_overlay=self.transform_debug.isChecked(),
                 )
             )
             if animation and self.compare_rest.isChecked() and not rest:
@@ -455,18 +490,29 @@ class AutomaticAnimationsView(QWidget):
                 self.time_label.setText(
                     f"{animation.name} — {self.current_time:.2f} / {animation.duration:.2f} seconds"
                 )
+                displacement = 0.0
+                for track in animation.tracks:
+                    if track.property_name == "position":
+                        current = sample_track(track, self.current_time)
+                        resting_value = track.keys[0].value
+                        if isinstance(current, tuple) and isinstance(resting_value, tuple):
+                            displacement = max(
+                                displacement,
+                                (
+                                    (current[0] - resting_value[0]) ** 2
+                                    + (current[1] - resting_value[1]) ** 2
+                                )
+                                ** 0.5,
+                            )
+                shown = displacement * (4.0 if self.emphasise_movement.isChecked() else 1.0)
+                self.motion_label.setText(f"Current joint displacement: {shown:.2f} px")
                 if update_slider:
                     self.scrubber.blockSignals(True)
                     self.scrubber.setValue(round(self.current_time / animation.duration * 1000))
                     self.scrubber.blockSignals(False)
                 if self.show_joints.isChecked() and animation.required_joints:
                     joint_name = animation.required_joints[0]
-                    definition = next(
-                        joint
-                        for joint in get_rig_template(self.project.rig_profile).joints
-                        if joint.name == joint_name
-                    )
-                    self.canvas.show_pivot(*definition.suggested_pivot)
+                    self.canvas.show_pivot(*resolve_joint_placement(self.project, joint_name))
                 else:
                     self.canvas.show_pivot(None, None)
         except (OSError, ValueError) as error:

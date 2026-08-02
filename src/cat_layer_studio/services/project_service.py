@@ -7,9 +7,10 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cat_layer_studio.constants import PROJECT_DIRECTORIES
+from cat_layer_studio.constants import JOINT_PLACEMENT_FORMAT_VERSION, PROJECT_DIRECTORIES
 from cat_layer_studio.models.project import Project
 from cat_layer_studio.services.image_loader import load_image
+from cat_layer_studio.services.joint_placement_service import ensure_joint_placements
 from cat_layer_studio.services.master_service import normalise_master_to_canvas, save_png_atomic
 
 
@@ -120,6 +121,7 @@ def import_source(project_directory: Path, source: Path, label: str = "candidate
 
 
 def save_project(project_directory: Path, project: Project, *, backup: bool = True) -> None:
+    ensure_joint_placements(project)
     project_path = project_directory / "project.json"
     if backup and project_path.exists():
         backup_directory = project_directory / "backups"
@@ -147,6 +149,11 @@ def load_project(project_file: Path) -> tuple[Path, Project]:
     project = Project.from_dict(data)
     if project.format_version != 1:
         raise ValueError(f"Unsupported project format version: {project.format_version}")
+    if project.joint_placement_format_version != JOINT_PLACEMENT_FORMAT_VERSION:
+        raise ValueError(
+            f"Unsupported joint placement format version: {project.joint_placement_format_version}"
+        )
+    ensure_joint_placements(project)
     project.resolve(project_directory, project.master_path)
     if project.master_original_path:
         project.resolve(project_directory, project.master_original_path)

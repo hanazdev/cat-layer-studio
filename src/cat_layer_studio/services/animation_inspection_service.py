@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from cat_layer_studio.models.animation import GeneratedAnimation
 from cat_layer_studio.models.project import Project
@@ -43,8 +43,11 @@ def inspect_animation_frames(
     rest_touches_edge = _edge_has_pixels(rest)
     key_times = {key.time for track in animation.tracks for key in track.keys}
     sample_times = sorted({0.0, animation.duration, *key_times, *maximum_extent_times(animation)})
+    measurable_change = False
     for time in sample_times:
         frame = composite_animation_frame(project_directory, project, animation, time)
+        if ImageChops.difference(rest, frame).getbbox() is not None:
+            measurable_change = True
         if _edge_has_pixels(frame) and not rest_touches_edge:
             warnings.append(
                 f"{animation.name} needs attention. Visible pixels reach the canvas edge at "
@@ -58,4 +61,10 @@ def inspect_animation_frames(
                 "seconds; inspect the attachment seams or reduce the movement amount."
             )
             break
+    if animation.template_id == "idle_breathing" and not measurable_change:
+        warnings.append(
+            "Idle breathing — Preview did not show measurable movement. "
+            "Try Emphasise movement for checking. Export is blocked until the preview "
+            "confirms movement."
+        )
     return warnings

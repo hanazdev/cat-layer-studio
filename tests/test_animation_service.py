@@ -15,6 +15,10 @@ from cat_layer_studio.services.animation_service import (
     generate_animation_set,
     reset_template,
 )
+from cat_layer_studio.services.joint_placement_service import (
+    accept_joint_placement,
+    ensure_joint_placements,
+)
 
 
 def _project() -> Project:
@@ -25,18 +29,23 @@ def _project() -> Project:
 
 def test_default_templates_generate_stable_rest_safe_mvp_tracks() -> None:
     project = _project()
+    ensure_joint_placements(project)
+    for joint_name in ("Head", "Tail"):
+        placement = accept_joint_placement(project, joint_name)
+        placement.validation_status = "valid"
+        placement.safe_rotation_min = -8
+        placement.safe_rotation_max = 8
     generated, warnings = generate_animation_set(project)
 
     assert [animation.name for animation in generated] == [
         "idle",
         "tail_sway",
-        "ear_twitch_left",
-        "ear_twitch_right",
         "head_tilt_left",
         "head_tilt_right",
         "happy_bounce",
     ]
     assert "blink" in warnings
+    assert warnings["ear_twitch_left"] == "Not supported by this artwork"
     assert {track.target_path for animation in generated for track in animation.tracks} >= {
         "Skeleton2D/Root/Body",
         "Skeleton2D/Root/Body/Head",
@@ -114,10 +123,10 @@ def test_template_reset_and_history_undo_redo() -> None:
     history.reset(animation_set)
     animation_set.templates[0].parameters["breathing_amount"] = "Expressive"
     history.commit(animation_set)
-    assert history.undo().templates[0].parameters["breathing_amount"] == "Subtle"
+    assert history.undo().templates[0].parameters["breathing_amount"] == "Normal"
     assert history.redo().templates[0].parameters["breathing_amount"] == "Expressive"
     reset_template(animation_set, "idle_breathing")
-    assert animation_set.templates[0].parameters["breathing_amount"] == "Subtle"
+    assert animation_set.templates[0].parameters["breathing_amount"] == "Normal"
 
 
 def test_animation_settings_round_trip_inside_project_json() -> None:

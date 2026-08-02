@@ -37,11 +37,18 @@ def test_workspace_generates_previews_and_persists_parameter_history(tmp_path: P
     view.set_project(tmp_path, project)
     application.processEvents()
 
-    assert view.animation_choice.count() == 7
+    assert view.animation_choice.count() == 2
     assert view.current_animation().name == "idle"
-    assert project.animation_set.compatibility_status["blink"].startswith(
-        "Blink cannot be generated yet."
+    assert project.animation_set.compatibility_status["blink"] == "Missing artwork"
+    assert (
+        project.animation_set.compatibility_status["ear_twitch_left"]
+        == "Not supported by this artwork"
     )
+    assert (
+        project.animation_set.compatibility_status["head_tilt_left"]
+        == "Needs movement-point review"
+    )
+    assert "preview only" in view.emphasise_movement.text()
     original = project.animation_set.templates[0].parameters["breathing_amount"]
     view._parameter_changed("breathing_amount", "Expressive")
     assert project.animation_set.templates[0].parameters["breathing_amount"] == "Expressive"

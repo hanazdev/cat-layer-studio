@@ -37,6 +37,7 @@ from cat_layer_studio.views.component_library_view import ComponentLibraryView
 from cat_layer_studio.views.export_view import ExportView
 from cat_layer_studio.views.fit_component_view import FitComponentView
 from cat_layer_studio.views.modular_preview_view import ModularPreviewView
+from cat_layer_studio.views.movement_setup_view import MovementSetupView
 from cat_layer_studio.widgets.fit_preview_dialog import FitPreviewDialog
 
 
@@ -65,14 +66,16 @@ class MainWindow(QMainWindow):
         )
         self.library = ComponentLibraryView()
         self.preview_view = ModularPreviewView()
+        self.movement_setup_view = MovementSetupView()
         self.animations_view = AutomaticAnimationsView()
         self.export_view = ExportView()
         self.tabs.addTab(self.project_view, "1. Project")
         self.tabs.addTab(self.fit_view, "2. Fit Component")
         self.tabs.addTab(self.library, "3. Component Library")
         self.tabs.addTab(self.preview_view, "4. Modular Preview")
-        self.tabs.addTab(self.animations_view, "5. Automatic Animations")
-        self.tabs.addTab(self.export_view, "6. Export")
+        self.tabs.addTab(self.movement_setup_view, "5. Movement Setup")
+        self.tabs.addTab(self.animations_view, "6. Automatic Animations")
+        self.tabs.addTab(self.export_view, "7. Export")
         self.setCentralWidget(self.tabs)
 
         self.fit_view.candidate_imported.connect(self._candidate_imported)
@@ -81,7 +84,10 @@ class MainWindow(QMainWindow):
         self.library.add_requested.connect(self._add_component_to_assembly)
         self.library.library_changed.connect(self._save_assembly)
         self.preview_view.project_changed.connect(self._save_assembly)
+        self.movement_setup_view.project_changed.connect(self._save_assembly)
+        self.movement_setup_view.movement_point_accepted.connect(self._movement_point_accepted)
         self.animations_view.project_changed.connect(self._save_assembly)
+        self.animations_view.adjust_movement_point_requested.connect(self._open_movement_setup)
         self.export_view.project_changed.connect(self._save_assembly)
         self.statusBar().showMessage("Create a project or open an existing project to begin.")
 
@@ -247,6 +253,7 @@ class MainWindow(QMainWindow):
             button.setEnabled(True)
         self._refresh_library()
         self.preview_view.set_project(directory, project)
+        self.movement_setup_view.set_project(directory, project)
         self.animations_view.set_project(directory, project)
         self.export_view.set_project(directory, project)
         self.tabs.setCurrentWidget(self.fit_view)
@@ -436,3 +443,11 @@ class MainWindow(QMainWindow):
             return
         save_project(self.project_directory, self.project)
         self.library.refresh()
+
+    def _open_movement_setup(self, joint_name: str) -> None:
+        self.movement_setup_view.open_joint(joint_name)
+        self.tabs.setCurrentWidget(self.movement_setup_view)
+
+    def _movement_point_accepted(self, _joint_name: str) -> None:
+        if self.project and self.project_directory:
+            self.animations_view.set_project(self.project_directory, self.project)

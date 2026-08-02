@@ -8,10 +8,12 @@ from cat_layer_studio.constants import (
     ASSEMBLY_FORMAT_VERSION,
     DEFAULT_CANVAS,
     DEFAULT_RIG_PROFILE,
+    JOINT_PLACEMENT_FORMAT_VERSION,
     PROJECT_FORMAT_VERSION,
 )
 from cat_layer_studio.models.animation import AnimationSet
 from cat_layer_studio.models.assembly_layer import AssemblyLayer
+from cat_layer_studio.models.joint_placement import JointPlacement
 from cat_layer_studio.models.transform import Transform
 
 
@@ -57,6 +59,9 @@ class Project:
     godot_executable: str | None = None
     godot_export_status: str = "Draft"
     animation_set: AnimationSet | None = None
+    joint_placements: list[JointPlacement] = field(default_factory=list)
+    joint_placement_format_version: int = JOINT_PLACEMENT_FORMAT_VERSION
+    animation_verification_valid: bool = False
 
     @property
     def canvas_size(self) -> tuple[int, int]:
@@ -76,6 +81,7 @@ class Project:
         value["assembly_layers"] = [layer.to_dict() for layer in self.assembly_layers]
         if self.animation_set:
             value["animation_set"] = self.animation_set.to_dict()
+        value["joint_placements"] = [item.to_dict() for item in self.joint_placements]
         return value
 
     @classmethod
@@ -88,6 +94,11 @@ class Project:
         ]
         if value.get("animation_set"):
             value["animation_set"] = AnimationSet.from_dict(value["animation_set"])
+        value["joint_placements"] = [
+            JointPlacement.from_dict(item) for item in value.get("joint_placements", [])
+        ]
+        value.setdefault("joint_placement_format_version", JOINT_PLACEMENT_FORMAT_VERSION)
+        value.setdefault("animation_verification_valid", False)
         for key in ("master_original_size", "master_canvas_size"):
             if value.get(key) is not None:
                 value[key] = tuple(value[key])

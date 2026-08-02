@@ -11,6 +11,11 @@ from cat_layer_studio.services.godot_export_service import (
     export_godot_rig,
     rollback_export,
 )
+from cat_layer_studio.services.joint_placement_service import (
+    accept_joint_placement,
+    ensure_joint_placements,
+    set_joint_point,
+)
 
 
 def _project(root: Path) -> Project:
@@ -31,6 +36,13 @@ def _project(root: Path) -> Project:
             pivot_y=9,
         )
     ]
+    ensure_joint_placements(project)
+    set_joint_point(project, "Head", 8, 9)
+    for joint_name in ("Head", "Tail"):
+        placement = accept_joint_placement(project, joint_name)
+        placement.validation_status = "valid"
+        placement.safe_rotation_min = -8
+        placement.safe_rotation_max = 8
     return project
 
 
@@ -59,6 +71,9 @@ def test_native_export_contains_generic_scene_manifest_and_runtime_api(tmp_path:
     assert manifest["rig_profile"] == "adult_front_sitting"
     assert manifest["layers"][0]["offset_x"] == 0.25
     assert manifest["layers"][0]["texture_path"] == "textures/head.png"
+    head = next(item for item in manifest["joint_placements"] if item["joint_name"] == "Head")
+    assert (head["x"], head["y"]) == (8, 9)
+    assert "Pivot" not in scene
     assert "func set_part(slot: StringName, texture: Texture2D) -> bool:" in script
     assert "func play_animation(animation_name: StringName) -> void:" in script
     assert "func return_to_rest_pose() -> void:" in script
@@ -68,8 +83,6 @@ def test_native_export_contains_generic_scene_manifest_and_runtime_api(tmp_path:
     assert [item["name"] for item in animation_manifest["animations"]] == [
         "idle",
         "tail_sway",
-        "ear_twitch_left",
-        "ear_twitch_right",
         "head_tilt_left",
         "head_tilt_right",
         "happy_bounce",
@@ -77,6 +90,7 @@ def test_native_export_contains_generic_scene_manifest_and_runtime_api(tmp_path:
     assert animation_manifest["animation_library"].endswith(
         "cat_adult_front_sitting_animations.tres"
     )
+    assert animation_manifest["joint_placements"] == manifest["joint_placements"]
     assert "AnimationPlayer" in scene
     assert result.preview_path.is_file()
     accept_export(result)
