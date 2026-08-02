@@ -64,6 +64,6 @@ def verify_godot_export(
     passed = completed.returncode == 0 and "CAT_LAYER_STUDIO_VERIFIED" in output
     return VerificationResult(
         passed,
-        "Godot Verified" if passed else "Godot validation failed",
+        "Godot Verified — Rig and animations" if passed else "Godot validation failed",
         output,
     )

@@ -25,6 +25,8 @@ def test_generated_rig_loads_and_replaces_a_slot_in_real_godot(tmp_path: Path) -
     components.mkdir(parents=True)
     Image.new("RGBA", (32, 32), (220, 80, 40, 255)).save(components / "body.png")
     Image.new("RGBA", (32, 32), (40, 120, 220, 180)).save(components / "head.png")
+    for name in ("left_open", "right_open", "left_closed", "right_closed"):
+        Image.new("RGBA", (32, 32), (30, 30, 30, 80)).save(components / f"{name}.png")
     project = Project("Integration", "master.png", 32, 32)
     project.assembly_layers = [
         AssemblyLayer(
@@ -48,6 +50,42 @@ def test_generated_rig_loads_and_replaces_a_slot_in_real_godot(tmp_path: Path) -
             attachment_joint="Head",
             pivot_x=16,
             pivot_y=15,
+        ),
+        AssemblyLayer(
+            "left-open",
+            "Left open eye",
+            "components/left_open.png",
+            "eye_screen_left",
+            z_index=40,
+            attachment_joint="Head",
+            asset_state="open",
+        ),
+        AssemblyLayer(
+            "right-open",
+            "Right open eye",
+            "components/right_open.png",
+            "eye_screen_right",
+            z_index=41,
+            attachment_joint="Head",
+            asset_state="open",
+        ),
+        AssemblyLayer(
+            "left-closed",
+            "Left closed eye",
+            "components/left_closed.png",
+            "eye_screen_left",
+            z_index=42,
+            attachment_joint="Head",
+            asset_state="closed",
+        ),
+        AssemblyLayer(
+            "right-closed",
+            "Right closed eye",
+            "components/right_closed.png",
+            "eye_screen_right",
+            z_index=43,
+            attachment_joint="Head",
+            asset_state="closed",
         ),
     ]
     game = tmp_path / "game"

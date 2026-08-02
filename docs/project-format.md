@@ -16,11 +16,16 @@ backups/
 `project.json` is UTF-8 JSON with `format_version: 1`. It stores the project name, canonical canvas,
 relative master path, export directory, rig-profile identifier, current candidate metadata, and a
 separately versioned `assembly_layers` list (`assembly_format_version: 1`).
+It also stores an optional versioned `animation_set`, including selected templates, beginner and
+advanced parameter values, preview speed and loop state, compatibility messages, and the last
+successful animation-library export. Older projects load without this field and receive safe
+defaults when Automatic Animations is opened.
 Candidate metadata contains a relative preserved source path, explicit transform values, and an
 optional mask path. Paths are resolved below the project root; escaping paths are rejected.
 
 Each assembly layer persists its stable ID, display name, relative component path, slot, visibility,
-lock, draw order, X/Y offsets, opacity, attachment joint, pivot, tint group, and rig profile.
+lock, draw order, X/Y offsets, opacity, attachment joint, pivot, tint group, rig profile, and an
+optional semantic artwork state such as `open` or `closed`.
 Projects created before assemblies existed load with an empty layer list.
 
 When a user accepts master normalisation, `source/master_original.<ext>` preserves the imported

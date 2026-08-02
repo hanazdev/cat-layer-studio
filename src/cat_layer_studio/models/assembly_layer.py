@@ -23,6 +23,7 @@ class AssemblyLayer:
     pivot_y: float | None = None
     tint_group: str | None = None
     rig_profile: str = DEFAULT_RIG_PROFILE
+    asset_state: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

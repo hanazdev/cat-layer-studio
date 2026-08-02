@@ -46,6 +46,8 @@ def test_native_export_contains_generic_scene_manifest_and_runtime_api(tmp_path:
     scene = result.scene_path.read_text(encoding="utf-8")
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     script = (result.output_directory / "script.gd").read_text(encoding="utf-8")
+    animation_library = result.animation_library_path.read_text(encoding="utf-8")
+    animation_manifest = json.loads(result.animation_manifest_path.read_text(encoding="utf-8"))
     assert '[node name="ModularCat2D" type="Node2D"]' in scene
     assert '[node name="Skeleton2D" type="Skeleton2D" parent="."]' in scene
     assert '[node name="Head" type="Bone2D"' in scene
@@ -58,6 +60,24 @@ def test_native_export_contains_generic_scene_manifest_and_runtime_api(tmp_path:
     assert manifest["layers"][0]["offset_x"] == 0.25
     assert manifest["layers"][0]["texture_path"] == "textures/head.png"
     assert "func set_part(slot: StringName, texture: Texture2D) -> bool:" in script
+    assert "func play_animation(animation_name: StringName) -> void:" in script
+    assert "func return_to_rest_pose() -> void:" in script
+    assert 'type="AnimationLibrary"' in animation_library
+    assert '&"idle": SubResource' in animation_library
+    assert 'NodePath("Skeleton2D/Root/Body:position")' in animation_library
+    assert [item["name"] for item in animation_manifest["animations"]] == [
+        "idle",
+        "tail_sway",
+        "ear_twitch_left",
+        "ear_twitch_right",
+        "head_tilt_left",
+        "head_tilt_right",
+        "happy_bounce",
+    ]
+    assert animation_manifest["animation_library"].endswith(
+        "cat_adult_front_sitting_animations.tres"
+    )
+    assert "AnimationPlayer" in scene
     assert result.preview_path.is_file()
     accept_export(result)
 

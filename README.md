@@ -4,9 +4,10 @@ Cat Layer Studio is a local Windows desktop application for fitting and assembli
 parts on one locked canvas. It preserves imported artwork, stores exact fitting and assembly values
 in a self-contained project, and exports a reusable Godot 4.6 cutout rig.
 
-This repository implements precise component fitting from issue #1 and modular preview / generic
-Godot rig export from [issue #4](https://github.com/hanazdev/cat-layer-studio/issues/4). It does
-**not** generate images, call an AI service, or author animation timelines.
+This repository implements precise component fitting from issue #1, modular preview / generic
+Godot rig export from issue #4, and automatic reusable animation generation from
+[issue #5](https://github.com/hanazdev/cat-layer-studio/issues/5). It does **not** generate images,
+call an AI service, or provide a freeform animation timeline editor.
 
 ## Install and run
 
@@ -35,13 +36,16 @@ Shift+Arrow moves by five, and Alt+Arrow moves by a quarter pixel.
 8. Add saved components to the Component Library assembly.
 9. Order, position, show/hide, lock, name, and assign each layer to a stable part slot.
 10. Place or fine-tune head, ear, and tail movement joints and preview a small turn.
-11. Export the generic `adult_front_sitting` scene into a Godot project.
-12. Select a Godot 4.6 executable to import, instantiate, inspect, and runtime-replace a slot.
+11. Open Automatic Animations, choose templates, adjust plain-language movement controls, and
+    preview or inspect maximum motion extents.
+12. Export the generic `adult_front_sitting` scene and reusable `AnimationLibrary` into Godot.
+13. Select a Godot 4.6 executable to import, play every animation, and runtime-replace a slot.
 
 Layers retain the full canvas because all parts share one coordinate system. The exported rig uses
 stable `Skeleton2D` / `Bone2D` paths and calculates each sprite's local pivot offset automatically.
 The rest pose therefore matches the Modular Preview while each texture remains replaceable through
-`set_part(slot, texture)`.
+`set_part(slot, texture)`. Animation tracks target those stable joints rather than texture
+filenames, and the runtime API can play them with `play_animation("idle")`.
 
 ## Tests and quality checks
 
@@ -51,12 +55,14 @@ python -m ruff check .
 ```
 
 The deterministic tests cover fitting, project migration, assembly persistence, ordering,
-subpixel compositing, validation, undo/redo, native scene/manifest writing, rollback, UI controls,
-and a live Godot 4.6 import/instantiation/runtime-replacement fixture when Godot is installed.
+subpixel compositing, validation, animation defaults and keyframes, rest and loop boundaries,
+undo/redo, native scene/library/manifest writing, rollback, UI controls, and a live Godot 4.6
+playback/runtime-replacement fixture when Godot is installed.
 
 ## Godot verification
 
-The app reports `Godot Verified` only after the selected Godot 4.6 executable imports the PNGs,
-loads and instantiates the generated scene, checks its stable nodes, textures and z-indexes, and
-replaces a texture through the slot API. A failed validation restores the previous exported rig.
+The app reports `Godot Verified — Rig and animations` only after the selected Godot 4.6 executable
+imports the PNGs, loads and instantiates the generated scene, plays every animation without missing
+targets, confirms exact rest/loop boundaries, and replaces a texture during playback. A failed
+validation restores the previous exported rig.
 See [docs/godot-export.md](docs/godot-export.md).

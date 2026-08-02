@@ -69,7 +69,8 @@ class ExportView(QWidget):
         actions.addStretch()
         checklist = QLabel(
             "The export contains: native .tscn • separate PNG textures • preview.png • "
-            "versioned manifest • part catalog • set_part(slot, texture) API • verification fixture"
+            "reusable AnimationLibrary • animation manifest • part catalog • playback and "
+            "part-replacement APIs • verification fixture"
         )
         checklist.setWordWrap(True)
         layout = QVBoxLayout(self)
@@ -152,15 +153,23 @@ class ExportView(QWidget):
                         "The previous valid export was restored.\n\n" + verification.output[-2000:],
                     )
                     return
-                self.project.godot_export_status = "Godot Verified"
+                self.project.godot_export_status = "Godot Verified — Rig and animations"
                 accept_export(result)
+                if self.project.animation_set:
+                    self.project.animation_set.last_successful_export = (
+                        result.animation_library_path.relative_to(godot_directory).as_posix()
+                    )
                 message = (
-                    "Godot loaded, instantiated, inspected, and replaced a texture in the "
-                    "exported rig successfully."
+                    "Godot loaded the rig and animation library, played every generated "
+                    "animation, and replaced a texture during playback successfully."
                 )
             else:
                 self.project.godot_export_status = "Exported — unverified"
                 accept_export(result)
+                if self.project.animation_set:
+                    self.project.animation_set.last_successful_export = (
+                        result.animation_library_path.relative_to(godot_directory).as_posix()
+                    )
                 message = (
                     "The rig was exported. Run Export and verify in Godot before calling it "
                     "engine-verified."

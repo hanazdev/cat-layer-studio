@@ -10,6 +10,7 @@ from cat_layer_studio.constants import (
     DEFAULT_RIG_PROFILE,
     PROJECT_FORMAT_VERSION,
 )
+from cat_layer_studio.models.animation import AnimationSet
 from cat_layer_studio.models.assembly_layer import AssemblyLayer
 from cat_layer_studio.models.transform import Transform
 
@@ -55,6 +56,7 @@ class Project:
     godot_output_directory: str = "assets/cats/modular/adult_front_sitting"
     godot_executable: str | None = None
     godot_export_status: str = "Draft"
+    animation_set: AnimationSet | None = None
 
     @property
     def canvas_size(self) -> tuple[int, int]:
@@ -72,6 +74,8 @@ class Project:
         if self.candidate:
             value["candidate"] = self.candidate.to_dict()
         value["assembly_layers"] = [layer.to_dict() for layer in self.assembly_layers]
+        if self.animation_set:
+            value["animation_set"] = self.animation_set.to_dict()
         return value
 
     @classmethod
@@ -82,6 +86,8 @@ class Project:
         value["assembly_layers"] = [
             AssemblyLayer.from_dict(layer) for layer in value.get("assembly_layers", [])
         ]
+        if value.get("animation_set"):
+            value["animation_set"] = AnimationSet.from_dict(value["animation_set"])
         for key in ("master_original_size", "master_canvas_size"):
             if value.get(key) is not None:
                 value[key] = tuple(value[key])
