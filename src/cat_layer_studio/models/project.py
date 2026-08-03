@@ -6,6 +6,7 @@ from typing import Any
 
 from cat_layer_studio.constants import (
     ASSEMBLY_FORMAT_VERSION,
+    ATTACHMENT_TREATMENT_FORMAT_VERSION,
     DEFAULT_CANVAS,
     DEFAULT_RIG_PROFILE,
     JOINT_PLACEMENT_FORMAT_VERSION,
@@ -13,6 +14,7 @@ from cat_layer_studio.constants import (
 )
 from cat_layer_studio.models.animation import AnimationSet
 from cat_layer_studio.models.assembly_layer import AssemblyLayer
+from cat_layer_studio.models.attachment_treatment import AttachmentTreatment
 from cat_layer_studio.models.joint_placement import JointPlacement
 from cat_layer_studio.models.transform import Transform
 
@@ -62,6 +64,8 @@ class Project:
     joint_placements: list[JointPlacement] = field(default_factory=list)
     joint_placement_format_version: int = JOINT_PLACEMENT_FORMAT_VERSION
     animation_verification_valid: bool = False
+    attachment_treatments: list[AttachmentTreatment] = field(default_factory=list)
+    attachment_treatment_format_version: int = ATTACHMENT_TREATMENT_FORMAT_VERSION
 
     @property
     def canvas_size(self) -> tuple[int, int]:
@@ -82,13 +86,18 @@ class Project:
         if self.animation_set:
             value["animation_set"] = self.animation_set.to_dict()
         value["joint_placements"] = [item.to_dict() for item in self.joint_placements]
+        value["attachment_treatments"] = [item.to_dict() for item in self.attachment_treatments]
         return value
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Project:
         value = dict(data)
         legacy_animation = bool(
-            value.get("animation_set") and int(value["animation_set"].get("format_version", 1)) < 2
+            value.get("animation_set") and int(value["animation_set"].get("format_version", 1)) < 4
+        )
+        legacy_attachment = (
+            int(value.get("attachment_treatment_format_version", 1))
+            < ATTACHMENT_TREATMENT_FORMAT_VERSION
         )
         if value.get("candidate"):
             value["candidate"] = CandidateState.from_dict(value["candidate"])
@@ -100,11 +109,26 @@ class Project:
         value["joint_placements"] = [
             JointPlacement.from_dict(item) for item in value.get("joint_placements", [])
         ]
+        value["attachment_treatments"] = [
+            AttachmentTreatment.from_dict(item) for item in value.get("attachment_treatments", [])
+        ]
+        value.setdefault("attachment_treatment_format_version", ATTACHMENT_TREATMENT_FORMAT_VERSION)
+        value["attachment_treatment_format_version"] = ATTACHMENT_TREATMENT_FORMAT_VERSION
         value.setdefault("joint_placement_format_version", JOINT_PLACEMENT_FORMAT_VERSION)
+        value["joint_placement_format_version"] = JOINT_PLACEMENT_FORMAT_VERSION
         value.setdefault("animation_verification_valid", False)
-        if legacy_animation:
+        if legacy_attachment:
+            for treatment in value["attachment_treatments"]:
+                treatment.verification_status = "Needs automatic fix"
+                treatment.verification_details = {
+                    "migration": (
+                        "The previous attachment treatment is stale and must be regenerated."
+                    )
+                }
+        if legacy_animation or legacy_attachment:
             value["animation_verification_valid"] = False
             value["godot_export_status"] = "Needs regeneration"
+        value["format_version"] = PROJECT_FORMAT_VERSION
         for key in ("master_original_size", "master_canvas_size"):
             if value.get(key) is not None:
                 value[key] = tuple(value[key])

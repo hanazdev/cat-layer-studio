@@ -117,7 +117,7 @@ def test_pivot_change_is_pixel_exact_at_rest_and_clamps_animation(tmp_path: Path
     settings = next(
         item for item in project.animation_set.templates if item.template_id == "head_tilt_left"
     )
-    animation = generate_animation(settings, project)
+    animation = generate_animation(settings, project, purpose="preview")
     assert animation.parameters["requested_rotation_degrees"] == -8
     assert animation.parameters["generated_rotation_degrees"] == -3.5
     assert animation.parameters["clamped_to_safe_range"] is True
@@ -127,7 +127,9 @@ def test_current_adult_front_sitting_regression_fixture() -> None:
     project_file = Path(__file__).parents[1] / "v1_test" / "project.json"
     directory, project = load_project(project_file)
     placement = update_suggestion(directory, project, "Head")
-    assert (placement.suggestion_x, placement.suggestion_y) == (253.0, 201.0)
+    # The fixture tracks the authoritative current Head artwork rather than the older staged
+    # component. Its automatically derived neck centre must remain deterministic.
+    assert (placement.suggestion_x, placement.suggestion_y) == (253.0, 211.0)
     assert placement.confidence == "high"
     assert (placement.suggestion_x, placement.suggestion_y) != (256.0, 270.0)
     accept_joint_placement(project, "Head")

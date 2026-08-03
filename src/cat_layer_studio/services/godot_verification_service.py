@@ -11,6 +11,7 @@ class VerificationResult:
     passed: bool
     message: str
     output: str
+    visual_parity_verified: bool = False
 
 
 def verify_godot_export(
@@ -19,6 +20,7 @@ def verify_godot_export(
     verification_script_res_path: str,
     *,
     timeout: int = 120,
+    rendered: bool = False,
 ) -> VerificationResult:
     if not executable.is_file():
         raise ValueError("Choose a Godot 4.6 executable.")
@@ -28,14 +30,17 @@ def verify_godot_export(
     user_home.mkdir(exist_ok=True)
     environment = os.environ.copy()
     environment["GODOT_USER_HOME"] = str(user_home)
-    common = [
-        str(executable),
-        "--headless",
-        "--path",
-        str(godot_project_directory),
-        "--log-file",
-        str(user_home / "godot.log"),
-    ]
+    common = [str(executable)]
+    if not rendered:
+        common.append("--headless")
+    common.extend(
+        [
+            "--path",
+            str(godot_project_directory),
+            "--log-file",
+            str(user_home / "godot.log"),
+        ]
+    )
 
     def run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -62,8 +67,13 @@ def verify_godot_export(
         return VerificationResult(False, "Godot validation failed", captured or "Godot timed out.")
     output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
     passed = completed.returncode == 0 and "CAT_LAYER_STUDIO_VERIFIED" in output
-    return VerificationResult(
-        passed,
-        "Godot Verified — Rig and animations" if passed else "Godot validation failed",
-        output,
-    )
+    dummy_renderer = "PARITY_FALLBACK_DUMMY_RENDERER" in output
+    visual_parity_verified = passed and not dummy_renderer
+    message = "Godot validation failed"
+    if passed:
+        message = (
+            "Godot visually verified — Rig and animations"
+            if visual_parity_verified
+            else "Godot structurally verified — rendered parity still required"
+        )
+    return VerificationResult(passed, message, output, visual_parity_verified)

@@ -86,9 +86,12 @@ class MainWindow(QMainWindow):
         self.preview_view.project_changed.connect(self._save_assembly)
         self.movement_setup_view.project_changed.connect(self._save_assembly)
         self.movement_setup_view.movement_point_accepted.connect(self._movement_point_accepted)
+        self.movement_setup_view.calibration_cancelled.connect(self._return_to_animation)
+        self.movement_setup_view.calibration_finished.connect(self._return_to_animation)
         self.animations_view.project_changed.connect(self._save_assembly)
         self.animations_view.adjust_movement_point_requested.connect(self._open_movement_setup)
         self.export_view.project_changed.connect(self._save_assembly)
+        self.tabs.currentChanged.connect(self._tab_changed)
         self.statusBar().showMessage("Create a project or open an existing project to begin.")
 
     def _build_project_view(self) -> QWidget:
@@ -444,9 +447,22 @@ class MainWindow(QMainWindow):
         save_project(self.project_directory, self.project)
         self.library.refresh()
 
-    def _open_movement_setup(self, joint_name: str) -> None:
-        self.movement_setup_view.open_joint(joint_name)
+    def _open_movement_setup(self, animation_template_id: str) -> None:
+        self.movement_setup_view.open_context(animation_template_id)
         self.tabs.setCurrentWidget(self.movement_setup_view)
+
+    def _return_to_animation(self, template_id: str) -> None:
+        if self.project and self.project_directory:
+            self.animations_view.set_project(self.project_directory, self.project)
+            self.animations_view.select_template(template_id)
+        self.tabs.setCurrentWidget(self.animations_view)
+
+    def _tab_changed(self, index: int) -> None:
+        if (
+            self.tabs.widget(index) is not self.movement_setup_view
+            and self.movement_setup_view.has_temporary_session()
+        ):
+            self.movement_setup_view.cancel_all_changes()
 
     def _movement_point_accepted(self, _joint_name: str) -> None:
         if self.project and self.project_directory:

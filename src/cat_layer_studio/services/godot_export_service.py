@@ -15,14 +15,26 @@ from cat_layer_studio.models.assembly_layer import AssemblyLayer
 from cat_layer_studio.models.project import Project
 from cat_layer_studio.models.rig_template import get_rig_template
 from cat_layer_studio.services.alpha_transform_service import normalise_rgba_for_transform
-from cat_layer_studio.services.animation_inspection_service import inspect_rendered_attachment
+from cat_layer_studio.services.animation_inspection_service import (
+    inspect_rendered_attachment,
+    production_sample_times,
+)
 from cat_layer_studio.services.animation_service import (
     discover_eye_assets,
     generate_animation_set,
     maximum_extent_times,
     sample_track,
 )
-from cat_layer_studio.services.composition_service import composite_assembly, ordered_layers
+from cat_layer_studio.services.attachment_treatment_service import (
+    discover_divergent_attachments,
+    prepare_animation_attachment_treatments,
+    with_attachment_visibility_tracks,
+)
+from cat_layer_studio.services.composition_service import (
+    composite_animation_frame,
+    composite_assembly,
+    project_render_layers,
+)
 from cat_layer_studio.services.joint_placement_service import resolved_joint_placements
 from cat_layer_studio.services.rig_hierarchy_service import evaluate_joint_matrices, joint_paths
 
@@ -39,6 +51,7 @@ SLOT_NODE_NAMES = {
     "white_marking": "WhiteMarkingVisual",
     "chest_fur": "ChestFurVisual",
     "accessory": "AccessoryVisual",
+    "attachment_treatment": "AttachmentCoverageGuard",
 }
 
 
@@ -88,7 +101,7 @@ def _scene_text(
         for logical_name, layer_id in discover_eye_assets(project).items()
         if "closed" in logical_name
     }
-    layers = ordered_layers(project.assembly_layers)
+    layers = project_render_layers(project)
     ext = [
         f'[ext_resource type="Script" path="{script_res_path}" id="1_script"]',
         '[ext_resource type="AnimationLibrary" '
@@ -151,6 +164,11 @@ def _scene_text(
         exported_names[layer.id] = name
         exported_paths[layer.id] = f"{parent}/{name}"
         asset_state = "closed" if layer.id in closed_eye_ids else (layer.asset_state or "default")
+        treatment = next(
+            (item for item in project.attachment_treatments if item.treatment_id == layer.id),
+            None,
+        )
+        visible_at_rest = layer.visible and layer.id not in closed_eye_ids and treatment is None
         # Full-canvas textures retain their world rest pose while the stable joint moves.
         local_x = canvas_centre[0] + layer.offset_x - joint_global[joint_name][0]
         local_y = canvas_centre[1] + layer.offset_y - joint_global[joint_name][1]
@@ -160,10 +178,20 @@ def _scene_text(
                 f'texture = ExtResource("{texture_ids[layer.id]}")',
                 f"position = Vector2({_fmt(local_x)}, {_fmt(local_y)})",
                 f"z_index = {layer.z_index}",
-                f"visible = {str(layer.visible and layer.id not in closed_eye_ids).lower()}",
+                "texture_filter = 2",
+                f"visible = {str(visible_at_rest).lower()}",
                 f"modulate = Color(1, 1, 1, {_fmt(layer.opacity)})",
                 f'metadata/slot_name = "{layer.slot}"',
                 f'metadata/asset_state = "{asset_state}"',
+                *(
+                    [
+                        "metadata/generated_attachment = true",
+                        f'metadata/treatment_method = "{treatment.method}"',
+                        f"metadata/provenance_version = {treatment.provenance_version}",
+                    ]
+                    if treatment
+                    else []
+                ),
                 "",
             ]
         )
@@ -313,7 +341,7 @@ func _run() -> void:
     var viewport := SubViewport.new()
     viewport.size = rig.canvas_size
     viewport.transparent_bg = true
-    viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+    viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
     root.add_child(viewport)
     viewport.add_child(rig)
     if rig.name != "ModularCat2D" or rig.get_node_or_null("Skeleton2D/Root") == null:
@@ -339,7 +367,7 @@ func _run() -> void:
             var sampled = animation_resource.value_track_interpolate(
                 track_index, float(check.time)
             )
-            if expected_track.property == "position":
+            if expected_track.property == "position" or expected_track.property == "scale":
                 var expected_value := Vector2(float(expected_track.x), float(expected_track.y))
                 if not sampled is Vector2 or sampled.distance_to(expected_value) > 0.001:
                     _fail("Godot track sample mismatch: " + str(track_path))
@@ -355,6 +383,23 @@ func _run() -> void:
             var expected_position := Vector2(float(expected_joint.x), float(expected_joint.y))
             if bone.global_position.distance_to(expected_position) > 0.001:
                 _fail("maximum-extent position mismatch: " + expected_joint.path)
+                return
+        if DisplayServer.get_name().to_lower() != "headless" and check.reference != "":
+            await process_frame
+            await process_frame
+            var rendered_motion := viewport.get_texture().get_image()
+            var reference_motion_texture := load(check.reference) as Texture2D
+            if reference_motion_texture == null:
+                _fail("motion reference did not load: " + check.reference)
+                return
+            var motion_difference := _mean_image_difference(
+                rendered_motion, reference_motion_texture.get_image()
+            )
+            if motion_difference > 18.0:
+                _fail(
+                    "rendered motion parity exceeded tolerance for "
+                    + check.animation + ": " + str(motion_difference)
+                )
                 return
     var animations = JSON.parse_string('{animations_json}')
     for animation in animations:
@@ -387,6 +432,13 @@ func _run() -> void:
         if rig.find_child(item.attachment_joint, true, false) == null:
             _fail("missing attachment joint: " + item.attachment_joint)
             return
+        if item.slot == "attachment_treatment":
+            if not bool(part.get_meta("generated_attachment", false)):
+                _fail("generated attachment coverage metadata is missing")
+                return
+            if part.get_meta("treatment_method", "") != item.treatment_method:
+                _fail("generated attachment coverage method does not match the manifest")
+                return
     if expected.size() > 0:
         var first = rig.get_part(expected[0].slot)
         if rig.has_animation(&"idle"):
@@ -405,30 +457,34 @@ func _run() -> void:
     if reference_texture == null:
         _fail("preview reference did not load")
         return
-    if RenderingServer.get_rendering_device() == null:
-        print("PARITY_FALLBACK_DUMMY_RENDERER: exact rest transforms verified")
+    if DisplayServer.get_name().to_lower() == "headless":
+        print("PARITY_FALLBACK_DUMMY_RENDERER: exact transforms and generated layers verified")
     else:
         var rendered := viewport.get_texture().get_image()
         var reference := reference_texture.get_image()
         if rendered.get_size() != reference.get_size():
             _fail("rendered preview has the wrong size")
             return
-        var difference := 0.0
-        for y in rendered.get_height():
-            for x in rendered.get_width():
-                var actual := rendered.get_pixel(x, y)
-                var approved := reference.get_pixel(x, y)
-                difference += abs(actual.r - approved.r) * 255.0
-                difference += abs(actual.g - approved.g) * 255.0
-                difference += abs(actual.b - approved.b) * 255.0
-                difference += abs(actual.a - approved.a) * 255.0
-        var denominator := rendered.get_width() * rendered.get_height() * 4.0
-        var mean_difference := difference / denominator
+        var mean_difference := _mean_image_difference(rendered, reference)
         if mean_difference > 18.0:
             _fail("rest-pose parity exceeded tolerance: " + str(mean_difference))
             return
     print("CAT_LAYER_STUDIO_VERIFIED")
     quit(0)
+
+func _mean_image_difference(rendered: Image, reference: Image) -> float:
+    if rendered.get_size() != reference.get_size():
+        return INF
+    var difference := 0.0
+    for y in rendered.get_height():
+        for x in rendered.get_width():
+            var actual := rendered.get_pixel(x, y)
+            var approved := reference.get_pixel(x, y)
+            difference += abs(actual.r - approved.r) * 255.0
+            difference += abs(actual.g - approved.g) * 255.0
+            difference += abs(actual.b - approved.b) * 255.0
+            difference += abs(actual.a - approved.a) * 255.0
+    return difference / (rendered.get_width() * rendered.get_height() * 4.0)
 
 func _snapshot_pose(rig: Node) -> Dictionary:
     var result := {{}}
@@ -482,10 +538,14 @@ def export_godot_rig(
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}-staging-", dir=output.parent))
     rollback: Path | None = None
     try:
+        preview_animations, _preview_warnings = generate_animation_set(
+            project, purpose="preview", project_directory=project_directory
+        )
+        prepare_animation_attachment_treatments(project_directory, project, preview_animations)
         textures = staging / "textures"
         textures.mkdir()
         texture_res_paths: dict[str, str] = {}
-        layers = ordered_layers(project.assembly_layers)
+        layers = project_render_layers(project)
         used_names: set[str] = set()
         texture_names: dict[str, str] = {}
         for layer in layers:
@@ -518,8 +578,40 @@ def export_godot_rig(
             if layer_id in node_paths
         }
         animations, animation_warnings = generate_animation_set(
-            project, asset_node_paths=eye_node_paths
+            project,
+            asset_node_paths=eye_node_paths,
+            project_directory=project_directory,
         )
+        animations = with_attachment_visibility_tracks(project, animations, node_paths)
+        unresolved_attachments = {
+            template_id: reason
+            for template_id, reason in animation_warnings.items()
+            if next(
+                (
+                    item.enabled
+                    for item in project.animation_set.templates
+                    if item.template_id == template_id
+                ),
+                False,
+            )
+            and reason
+            in {
+                "Needs automatic preparation",
+                "Needs automatic fix",
+                "Needs user review",
+                "Not supported by this artwork",
+                "Verification failed",
+            }
+        }
+        if unresolved_attachments:
+            detail = "; ".join(
+                f"{name.replace('_', ' ').title()}: {reason}"
+                for name, reason in unresolved_attachments.items()
+            )
+            raise ValueError(
+                "Production export blocked because a visible layer attachment has not passed. "
+                f"Run automatic preparation or explicitly disable it. {detail}"
+            )
         template = get_rig_template(project.rig_profile)
         attachment_map = {
             layer.attachment_joint or template.attachment_map.get(layer.slot, "Root")
@@ -529,15 +621,19 @@ def export_godot_rig(
         verified_animations: list[GeneratedAnimation] = []
         for animation in animations:
             failure: str | None = None
-            for joint_name in animation.required_joints:
+            discovered_joints = {
+                relation.joint_name
+                for relation in discover_divergent_attachments(project, [animation])
+            }
+            for joint_name in set(animation.required_joints) | discovered_joints:
                 joint = next(item for item in template.joints if item.name == joint_name)
                 if joint_name not in attachment_map or joint.parent not in attachment_map:
                     continue
-                for time in maximum_extent_times(animation):
+                for time in production_sample_times(animation):
                     diagnostic = inspect_rendered_attachment(
                         project_directory, project, animation, joint_name, time
                     )
-                    if diagnostic.status in {"gap", "fringe"}:
+                    if diagnostic.status in {"gap", "fringe", "boundary", "unknown"}:
                         failure = diagnostic.message
                         break
                 if failure:
@@ -547,6 +643,22 @@ def export_godot_rig(
             else:
                 verified_animations.append(animation)
         animations = verified_animations
+        failed_enabled = {
+            animation.template_id: animation_warnings[animation.template_id]
+            for animation in preview_animations
+            if animation.template_id in animation_warnings
+            and next(
+                (
+                    item.enabled
+                    for item in project.animation_set.templates
+                    if item.template_id == animation.template_id
+                ),
+                False,
+            )
+        }
+        if failed_enabled:
+            detail = "; ".join(f"{name}: {reason}" for name, reason in failed_enabled.items())
+            raise ValueError(f"Production export blocked by attachment verification. {detail}")
         (staging / animation_library_name).write_text(
             _animation_library_text(animations), encoding="utf-8", newline="\n"
         )
@@ -568,6 +680,7 @@ def export_godot_rig(
             "scene_path": scene_res_path,
             "layers": manifest_layers,
             "joint_placements": [item.to_dict() for item in project.joint_placements],
+            "attachment_treatments": [item.to_dict() for item in project.attachment_treatments],
         }
         (staging / "cat_rig_manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
@@ -606,6 +719,7 @@ def export_godot_rig(
             ],
             "compatibility_warnings": animation_warnings,
             "joint_placements": [item.to_dict() for item in project.joint_placements],
+            "attachment_treatments": [item.to_dict() for item in project.attachment_treatments],
         }
         (staging / "cat_animation_manifest.json").write_text(
             json.dumps(animation_manifest, indent=2, sort_keys=True) + "\n",
@@ -621,29 +735,49 @@ def export_godot_rig(
                 "x": project.canvas_width / 2 + layer.offset_x,
                 "y": project.canvas_height / 2 + layer.offset_y,
                 "attachment_joint": layer.attachment_joint or "Root",
+                "treatment_method": next(
+                    (
+                        item.method
+                        for item in project.attachment_treatments
+                        if item.treatment_id == layer.id
+                    ),
+                    "",
+                ),
             }
             for layer in layers
         ]
         template = get_rig_template(project.rig_profile)
         paths = joint_paths(template)
         expected_motion: list[dict[str, object]] = []
+        verification_frames = staging / "verification_frames"
+        verification_frames.mkdir()
         for animation in animations:
             for time in maximum_extent_times(animation):
                 _, matrices = evaluate_joint_matrices(project, animation, time)
                 active_tracks = [
                     track
                     for track in animation.tracks
-                    if track.property_name in {"position", "rotation"}
+                    if track.property_name in {"position", "rotation", "scale"}
                 ]
                 active_joints = {
                     joint.name
                     for joint in template.joints
                     if any(track.target_path == paths[joint.name] for track in active_tracks)
                 }
+                frame_name = f"{animation.template_id}_{round(time * 1000):06d}.png"
+                composite_animation_frame(project_directory, project, animation, time).save(
+                    verification_frames / frame_name
+                )
                 expected_motion.append(
                     {
                         "animation": animation.name,
                         "time": time,
+                        "reference": (
+                            f"{output_res_directory}/verification_frames/{frame_name}"
+                            if animation.template_id
+                            in {"idle_breathing", "head_tilt_left", "head_tilt_right"}
+                            else ""
+                        ),
                         "tracks": [
                             (
                                 {
@@ -652,7 +786,7 @@ def export_godot_rig(
                                     "x": sample_track(track, time)[0],
                                     "y": sample_track(track, time)[1],
                                 }
-                                if track.property_name == "position"
+                                if track.property_name in {"position", "scale"}
                                 else {
                                     "path": track.target_path,
                                     "property": track.property_name,

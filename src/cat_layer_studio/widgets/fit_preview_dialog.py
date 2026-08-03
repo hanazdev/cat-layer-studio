@@ -48,8 +48,10 @@ def _panel(
         )
         panel.alpha_composite(
             shown,
-            (origin[0] + (stage_pixels[0] - shown.width) // 2,
-             origin[1] + (stage_pixels[1] - shown.height) // 2),
+            (
+                origin[0] + (stage_pixels[0] - shown.width) // 2,
+                origin[1] + (stage_pixels[1] - shown.height) // 2,
+            ),
         )
     else:
         fitted = rasterise_transform(source, transform, canvas_size)
@@ -68,8 +70,10 @@ def _panel(
         width=3,
     )
     if not show_whole_source:
-        fitted_size = (round(source.width * transform.scale_x * scale),
-                       round(source.height * transform.scale_y * scale))
+        fitted_size = (
+            round(source.width * transform.scale_x * scale),
+            round(source.height * transform.scale_y * scale),
+        )
         fitted_origin = (
             origin[0] + (stage_pixels[0] - fitted_size[0]) // 2,
             origin[1] + (stage_pixels[1] - fitted_size[1]) // 2,
@@ -116,10 +120,12 @@ class FitPreviewDialog(QDialog):
         heading.setWordWrap(True)
         previews = QHBoxLayout()
         for title, pixmap, caption in (
-            ("Before", _panel(source, canvas_size, Transform(), True),
-             "Blue: locked canvas"),
-            ("After", _panel(source, canvas_size, transform, False),
-             "Blue: canvas · Orange: fitted bounds"),
+            ("Before", _panel(source, canvas_size, Transform(), True), "Blue: locked canvas"),
+            (
+                "After",
+                _panel(source, canvas_size, transform, False),
+                "Blue: canvas · Orange: fitted bounds",
+            ),
         ):
             column = QVBoxLayout()
             label = QLabel(title)

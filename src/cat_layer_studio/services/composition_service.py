@@ -22,11 +22,68 @@ def ordered_layers(layers: list[AssemblyLayer]) -> list[AssemblyLayer]:
     return sorted(layers, key=lambda layer: (layer.z_index, layer.id))
 
 
+def project_render_layers(
+    project: Project, *, include_treatments: bool = True
+) -> list[AssemblyLayer]:
+    layers = list(project.assembly_layers)
+    if include_treatments:
+        from cat_layer_studio.services.attachment_treatment_service import (
+            ATTACHMENT_GUARD_ALGORITHM_VERSION,
+            ATTACHMENT_GUARD_METHOD,
+            attachment_treatment_depth_is_valid,
+        )
+
+        for treatment in project.attachment_treatments:
+            if not (
+                treatment.enabled
+                and treatment.method == ATTACHMENT_GUARD_METHOD
+                and treatment.algorithm_version >= ATTACHMENT_GUARD_ALGORITHM_VERSION
+                and treatment.provenance_version >= ATTACHMENT_GUARD_ALGORITHM_VERSION
+                and attachment_treatment_depth_is_valid(project, treatment)
+            ):
+                continue
+            layers.append(
+                AssemblyLayer(
+                    id=treatment.treatment_id,
+                    display_name="Generated attachment coverage guard",
+                    texture_path=treatment.texture_path,
+                    slot="attachment_treatment",
+                    z_index=treatment.z_index,
+                    attachment_joint=treatment.parent_joint,
+                    asset_state="generated",
+                )
+            )
+    return ordered_layers(layers)
+
+
 def _closed_eye_at_rest(layer: AssemblyLayer) -> bool:
     if layer.slot not in {"eye_screen_left", "eye_screen_right"}:
         return False
     state_hint = (layer.asset_state or f"{layer.display_name} {layer.texture_path}").lower()
     return "closed" in state_hint
+
+
+def _layer_source(project_directory: Path, project: Project, layer: AssemblyLayer) -> Image.Image:
+    with Image.open(project.resolve(project_directory, layer.texture_path)) as opened:
+        image = normalise_rgba_for_transform(opened)
+    if image.size != project.canvas_size:
+        raise ValueError(f"{layer.display_name} does not match the project canvas.")
+    if layer.opacity < 1:
+        alpha = image.getchannel("A").point(
+            lambda value, opacity=layer.opacity: round(value * opacity)
+        )
+        image.putalpha(alpha)
+    return image
+
+
+def render_base_layer(
+    project_directory: Path, project: Project, layer: AssemblyLayer
+) -> Image.Image:
+    """Render one native layer at rest, independently of all animation transforms."""
+    source = _layer_source(project_directory, project, layer)
+    return transform_premultiplied_rgba(
+        source, (1, 0, -layer.offset_x, 0, 1, -layer.offset_y), project.canvas_size
+    )
 
 
 def composite_assembly(
@@ -38,24 +95,12 @@ def composite_assembly(
     rotation_degrees: float = 0.0,
 ) -> Image.Image:
     output = Image.new("RGBA", project.canvas_size, (0, 0, 0, 0))
-    for layer in ordered_layers(project.assembly_layers):
+    # Rest is the exact native assembly. Coverage guards only exist while connected joints have
+    # divergent effective transforms.
+    for layer in project_render_layers(project, include_treatments=False):
         if (not layer.visible or _closed_eye_at_rest(layer)) and not include_hidden:
             continue
-        path = project.resolve(project_directory, layer.texture_path)
-        with Image.open(path) as opened:
-            image = normalise_rgba_for_transform(opened)
-        if image.size != project.canvas_size:
-            raise ValueError(f"{layer.display_name} does not match the project canvas.")
-        if layer.opacity < 1:
-            alpha = image.getchannel("A").point(
-                lambda value, opacity=layer.opacity: round(value * opacity)
-            )
-            image.putalpha(alpha)
-        # Pillow's integer paste anchor is deterministic. Sub-pixel offsets use an affine
-        # transform so preview and exported Godot coordinates retain the exact decimal values.
-        translated = transform_premultiplied_rgba(
-            image, (1, 0, -layer.offset_x, 0, 1, -layer.offset_y), project.canvas_size
-        )
+        translated = render_base_layer(project_directory, project, layer)
         if layer.id == rotation_layer_id and rotation_degrees:
             joint_name = layer.attachment_joint or get_rig_template(
                 project.rig_profile
@@ -107,22 +152,22 @@ def composite_animation_frame(
     diagnostic_alphas: dict[str, Image.Image] = {}
     original_head_bounds: tuple[int, int, int, int] | None = None
     render_layers: list[tuple[AssemblyLayer, Image.Image, object]] = []
-    for layer in ordered_layers(project.assembly_layers):
+    for layer in project_render_layers(project):
+        if layer.slot == "attachment_treatment":
+            from cat_layer_studio.services.attachment_treatment_service import treatment_active
+
+            treatment = next(
+                item for item in project.attachment_treatments if item.treatment_id == layer.id
+            )
+            if not treatment_active(project, treatment, animation, time):
+                continue
         visible = layer.visible and not _closed_eye_at_rest(layer)
         fallback_path = f"Visuals/{layer.id}"
         if (fallback_path, "visible") in samples:
             visible = bool(samples[(fallback_path, "visible")])
         if not visible:
             continue
-        with Image.open(project.resolve(project_directory, layer.texture_path)) as opened:
-            image = normalise_rgba_for_transform(opened)
-        if image.size != project.canvas_size:
-            raise ValueError(f"{layer.display_name} does not match the project canvas.")
-        if layer.opacity < 1:
-            alpha = image.getchannel("A").point(
-                lambda value, opacity=layer.opacity: round(value * opacity)
-            )
-            image.putalpha(alpha)
+        image = _layer_source(project_directory, project, layer)
         if debug_overlay and layer.slot == "head":
             original = image.transform(
                 project.canvas_size,

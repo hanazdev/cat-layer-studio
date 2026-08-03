@@ -61,8 +61,9 @@ playback/runtime-replacement fixture when Godot is installed.
 
 ## Godot verification
 
-The app reports `Godot Verified — Rig and animations` only after the selected Godot 4.6 executable
-imports the PNGs, loads and instantiates the generated scene, plays every animation without missing
-targets, confirms exact rest/loop boundaries, and replaces a texture during playback. A failed
-validation restores the previous exported rig.
+The app distinguishes structural verification from rendered visual parity. A dummy-renderer run
+can verify resources, transforms, generated layers, exact rest/loop boundaries, and runtime texture
+replacement, but reports that rendered parity is still required. Only a rendering-capable Godot
+run that passes the image comparison reports `Godot visually verified — Rig and animations`. A
+failed validation restores the previous exported rig.
 See [docs/godot-export.md](docs/godot-export.md).

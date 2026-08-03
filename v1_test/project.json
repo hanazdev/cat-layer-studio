@@ -1,0 +1,466 @@
+{
+  "animation_set": {
+    "compatibility_status": {
+      "blink": "Missing artwork",
+      "ear_twitch_left": "Not supported",
+      "ear_twitch_right": "Not supported",
+      "happy_bounce": "Preview ready",
+      "head_tilt_left": "Preview ready",
+      "head_tilt_right": "Preview ready",
+      "idle_breathing": "Preview ready",
+      "tail_sway": "Preview ready"
+    },
+    "export_status": {
+      "blink": "Missing artwork",
+      "ear_twitch_left": "Not supported",
+      "ear_twitch_right": "Not supported",
+      "happy_bounce": "Ready for export",
+      "head_tilt_left": "Passed with generated attachment treatment",
+      "head_tilt_right": "Passed with generated attachment treatment",
+      "idle_breathing": "Ready for export",
+      "tail_sway": "Ready for export"
+    },
+    "format_version": 4,
+    "last_successful_export": null,
+    "preview_loop": true,
+    "preview_speed": 1.0,
+    "preview_status": {
+      "blink": "Missing artwork",
+      "ear_twitch_left": "Not supported",
+      "ear_twitch_right": "Not supported",
+      "happy_bounce": "Preview ready",
+      "head_tilt_left": "Preview ready",
+      "head_tilt_right": "Preview ready",
+      "idle_breathing": "Preview ready",
+      "tail_sway": "Preview ready"
+    },
+    "rig_profile": "adult_front_sitting",
+    "templates": [
+      {
+        "duration": 1.6,
+        "enabled": true,
+        "loop": true,
+        "parameters": {
+          "breathing_speed": "Natural",
+          "breathing_strength": "Noticeable",
+          "head_movement": true,
+          "keep_paws_grounded": true
+        },
+        "template_id": "idle_breathing"
+      },
+      {
+        "duration": 1.8,
+        "enabled": true,
+        "loop": true,
+        "parameters": {
+          "direction": "Left first",
+          "pause_between_sways": false,
+          "speed": "Normal",
+          "sway_amount": "Expressive"
+        },
+        "template_id": "tail_sway"
+      },
+      {
+        "duration": 0.45,
+        "enabled": false,
+        "loop": false,
+        "parameters": {
+          "movement_amount": "Normal",
+          "repeat_count": 1,
+          "twitch_speed": "Normal"
+        },
+        "template_id": "ear_twitch_left"
+      },
+      {
+        "duration": 0.45,
+        "enabled": false,
+        "loop": false,
+        "parameters": {
+          "movement_amount": "Subtle",
+          "repeat_count": 1,
+          "twitch_speed": "Normal"
+        },
+        "template_id": "ear_twitch_right"
+      },
+      {
+        "duration": 1.0,
+        "enabled": true,
+        "loop": false,
+        "parameters": {
+          "direction": "Left",
+          "hold_duration": 0.25,
+          "return_speed": "Normal",
+          "tilt_amount": "Subtle"
+        },
+        "template_id": "head_tilt_left"
+      },
+      {
+        "duration": 1.0,
+        "enabled": true,
+        "loop": false,
+        "parameters": {
+          "direction": "Right",
+          "hold_duration": 0.25,
+          "return_speed": "Normal",
+          "tilt_amount": "Normal"
+        },
+        "template_id": "head_tilt_right"
+      },
+      {
+        "duration": 1.0,
+        "enabled": true,
+        "loop": false,
+        "parameters": {
+          "bounce_height": "Normal",
+          "bounce_speed": "Normal",
+          "head_movement": false,
+          "move_ears_too": false,
+          "number_of_bounces": 2
+        },
+        "template_id": "happy_bounce"
+      },
+      {
+        "duration": 0.22,
+        "enabled": true,
+        "loop": false,
+        "parameters": {
+          "blink_speed": "Normal",
+          "hold_closed_briefly": true
+        },
+        "template_id": "blink"
+      }
+    ]
+  },
+  "animation_verification_valid": false,
+  "assembly_format_version": 1,
+  "assembly_layers": [
+    {
+      "asset_state": null,
+      "attachment_joint": "Body",
+      "display_name": "Body Neutral",
+      "id": "a76c2f0201524602b927c05b146e8853",
+      "locked": false,
+      "offset_x": 0,
+      "offset_y": 0,
+      "opacity": 1.0,
+      "pivot_x": 256.0,
+      "pivot_y": 360.0,
+      "rig_profile": "adult_front_sitting",
+      "slot": "body",
+      "texture_path": "components/body_neutral.png",
+      "tint_group": null,
+      "visible": true,
+      "z_index": 20
+    },
+    {
+      "asset_state": null,
+      "attachment_joint": "EarScreenLeft",
+      "display_name": "Ear Left Upright",
+      "id": "0176fd4b3d4240379e3b4b289596854f",
+      "locked": false,
+      "offset_x": 0,
+      "offset_y": 0,
+      "opacity": 1.0,
+      "pivot_x": 190.0,
+      "pivot_y": 150.0,
+      "rig_profile": "adult_front_sitting",
+      "slot": "ear_screen_left",
+      "texture_path": "components/ear_left_upright.png",
+      "tint_group": null,
+      "visible": true,
+      "z_index": 40
+    },
+    {
+      "asset_state": null,
+      "attachment_joint": "EarScreenRight",
+      "display_name": "Ear Right Upright",
+      "id": "c389951cab73476ab2b931ebe07b6e57",
+      "locked": false,
+      "offset_x": 0,
+      "offset_y": 0,
+      "opacity": 1.0,
+      "pivot_x": 322.0,
+      "pivot_y": 150.0,
+      "rig_profile": "adult_front_sitting",
+      "slot": "ear_screen_right",
+      "texture_path": "components/ear_right_upright.png",
+      "tint_group": null,
+      "visible": true,
+      "z_index": 50
+    },
+    {
+      "asset_state": null,
+      "attachment_joint": "Head",
+      "display_name": "Head Neutral",
+      "id": "f9d0570fefbc4779b1a7a40c1baf52b9",
+      "locked": false,
+      "offset_x": 0,
+      "offset_y": 0,
+      "opacity": 1.0,
+      "pivot_x": 256.0,
+      "pivot_y": 270.0,
+      "rig_profile": "adult_front_sitting",
+      "slot": "head",
+      "texture_path": "components/head_neutral.png",
+      "tint_group": null,
+      "visible": true,
+      "z_index": 30
+    },
+    {
+      "asset_state": null,
+      "attachment_joint": "Tail",
+      "display_name": "Tail Normal",
+      "id": "0b7e5dd9e80f4bc6a086267809e888d3",
+      "locked": false,
+      "offset_x": 0,
+      "offset_y": 0,
+      "opacity": 1.0,
+      "pivot_x": 350.0,
+      "pivot_y": 370.0,
+      "rig_profile": "adult_front_sitting",
+      "slot": "tail",
+      "texture_path": "components/tail_normal.png",
+      "tint_group": null,
+      "visible": true,
+      "z_index": 10
+    },
+    {
+      "asset_state": null,
+      "attachment_joint": "Head",
+      "display_name": "Left Eye Colourless",
+      "id": "73043e223a074ff4b4c9dba4b41f09db",
+      "locked": false,
+      "offset_x": 0,
+      "offset_y": 0,
+      "opacity": 1.0,
+      "pivot_x": 256.0,
+      "pivot_y": 270.0,
+      "rig_profile": "adult_front_sitting",
+      "slot": "eye_screen_left",
+      "texture_path": "components/left_eye_colourless.png",
+      "tint_group": null,
+      "visible": true,
+      "z_index": 60
+    },
+    {
+      "asset_state": null,
+      "attachment_joint": "Head",
+      "display_name": "Right Eye Colourless",
+      "id": "f6ed5062981049fba7a1eefc8648304b",
+      "locked": false,
+      "offset_x": 0,
+      "offset_y": 0,
+      "opacity": 1.0,
+      "pivot_x": 256.0,
+      "pivot_y": 270.0,
+      "rig_profile": "adult_front_sitting",
+      "slot": "eye_screen_right",
+      "texture_path": "components/right_eye_colourless.png",
+      "tint_group": null,
+      "visible": true,
+      "z_index": 70
+    }
+  ],
+  "attachment_treatment_format_version": 3,
+  "attachment_treatments": [
+    {
+      "algorithm_version": 3,
+      "alpha_threshold": 16,
+      "edge_coverage_result": {
+        "maximum_high_contrast_edge_pixels": 8,
+        "maximum_uncovered_component_pixels": 12,
+        "required_coverage_percent": 95.0,
+        "templates_checked": 2,
+        "templates_passed": 2
+      },
+      "enabled": true,
+      "face_protection_cutoff_y": 217,
+      "generated_from": "existing artwork overlap",
+      "joint_name": "Head",
+      "mask_bounds": [
+        181,
+        187,
+        326,
+        242
+      ],
+      "method": "body_front_depth_occlusion",
+      "parent_joint": "Body",
+      "provenance_version": 3,
+      "regeneration_provenance": {
+        "algorithm": "body_front_depth_occlusion",
+        "algorithm_version": 3,
+        "body_base_pass": "preserved unchanged below Head",
+        "component_policy": "complete swept boundary within protected neck overlap",
+        "generator": "Cat Layer Studio",
+        "sample_count": 25,
+        "source": "Native Body pixels re-composited over the swept lower-Head boundary"
+      },
+      "sampled_angle_range": [
+        -15.0,
+        15.0
+      ],
+      "source_layer_hashes": {
+        "a76c2f0201524602b927c05b146e8853": "ececc8e88be46a7b155af43abac6dbd7ec6dd7b8cca66c880cc59d1412b07f02",
+        "f9d0570fefbc4779b1a7a40c1baf52b9": "b583f74ef427d051ac8af785f73e772247de5a21f59f8f14826833d53f49b802"
+      },
+      "source_layer_ids": [
+        "a76c2f0201524602b927c05b146e8853",
+        "f9d0570fefbc4779b1a7a40c1baf52b9"
+      ],
+      "template_ids": [
+        "head_tilt_left",
+        "head_tilt_right"
+      ],
+      "texture_path": "generated/attachments/head_neck_occlusion.png",
+      "treatment_id": "generated_head_neck_occlusion",
+      "validated_backgrounds": [
+        "black",
+        "white",
+        "grey",
+        "saturated magenta"
+      ],
+      "verification_details": {
+        "head_tilt_left": "All production samples passed.",
+        "head_tilt_right": "All production samples passed."
+      },
+      "verification_status": "Passed with generated attachment treatment",
+      "z_index": 31
+    }
+  ],
+  "candidate": {
+    "mask_path": null,
+    "source_path": "source/candidate_27.png",
+    "transform": {
+      "pivot_x": null,
+      "pivot_y": null,
+      "rotation_degrees": 0.0,
+      "scale_x": 0.213,
+      "scale_y": 0.213,
+      "x": -2.0,
+      "y": -85.0
+    }
+  },
+  "canvas_height": 512,
+  "canvas_width": 512,
+  "export_directory": "exports",
+  "format_version": 2,
+  "godot_executable": "C:/Godot/Godot_v4.6-stable_win64.exe",
+  "godot_export_status": "Needs regeneration",
+  "godot_output_directory": "assets/cats/modular/adult_front_sitting",
+  "godot_project_directory": "C:\\Users\\Peebis\\repos\\cattery-dungeon",
+  "joint_placement_format_version": 2,
+  "joint_placements": [
+    {
+      "approved": false,
+      "confidence": "unknown",
+      "joint_name": "Root",
+      "last_approved_x": null,
+      "last_approved_y": null,
+      "safe_rotation_max": null,
+      "safe_rotation_min": null,
+      "source": "template",
+      "suggestion_reason": "",
+      "suggestion_x": null,
+      "suggestion_y": null,
+      "validation_status": "not_checked",
+      "x": 256.0,
+      "y": 256.0
+    },
+    {
+      "approved": false,
+      "confidence": "low",
+      "joint_name": "Body",
+      "last_approved_x": null,
+      "last_approved_y": null,
+      "safe_rotation_max": null,
+      "safe_rotation_min": null,
+      "source": "user",
+      "suggestion_reason": "Artwork is missing; rig-template fallback used.",
+      "suggestion_x": 256.0,
+      "suggestion_y": 360.0,
+      "validation_status": "not_checked",
+      "x": 204.0,
+      "y": 365.0
+    },
+    {
+      "approved": true,
+      "confidence": "high",
+      "joint_name": "Head",
+      "last_approved_x": 254.16666666666666,
+      "last_approved_y": 197.22222222222223,
+      "safe_rotation_max": 15.0,
+      "safe_rotation_min": -15.0,
+      "source": "user",
+      "suggestion_reason": "Inside the substantial Head/Body artwork overlap (5142 opaque pixels).",
+      "suggestion_x": 253.0,
+      "suggestion_y": 201.0,
+      "validation_status": "valid",
+      "x": 254.16666666666666,
+      "y": 197.22222222222223
+    },
+    {
+      "approved": false,
+      "confidence": "unknown",
+      "joint_name": "EarScreenLeft",
+      "last_approved_x": null,
+      "last_approved_y": null,
+      "safe_rotation_max": null,
+      "safe_rotation_min": null,
+      "source": "template",
+      "suggestion_reason": "",
+      "suggestion_x": null,
+      "suggestion_y": null,
+      "validation_status": "not_checked",
+      "x": 190.0,
+      "y": 150.0
+    },
+    {
+      "approved": false,
+      "confidence": "unknown",
+      "joint_name": "EarScreenRight",
+      "last_approved_x": null,
+      "last_approved_y": null,
+      "safe_rotation_max": null,
+      "safe_rotation_min": null,
+      "source": "template",
+      "suggestion_reason": "",
+      "suggestion_x": null,
+      "suggestion_y": null,
+      "validation_status": "not_checked",
+      "x": 322.0,
+      "y": 150.0
+    },
+    {
+      "approved": true,
+      "confidence": "high",
+      "joint_name": "Tail",
+      "last_approved_x": 340.0,
+      "last_approved_y": 395.0,
+      "safe_rotation_max": 15.0,
+      "safe_rotation_min": -15.0,
+      "source": "automatic",
+      "suggestion_reason": "Inside the substantial Tail/Body artwork overlap (630 opaque pixels).",
+      "suggestion_x": 340.0,
+      "suggestion_y": 395.0,
+      "validation_status": "valid",
+      "x": 340.0,
+      "y": 395.0
+    }
+  ],
+  "key_colour": null,
+  "master_canvas_size": [
+    512,
+    512
+  ],
+  "master_normalisation_mode": "fit_inside",
+  "master_original_path": "source/master_original.png",
+  "master_original_size": [
+    1254,
+    1254
+  ],
+  "master_path": "master/master_canvas.png",
+  "master_resize_scale": 0.4082934609250399,
+  "master_working_path": "master/master_canvas.png",
+  "name": "V1_Test",
+  "rig_profile": "adult_front_sitting"
+}

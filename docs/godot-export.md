@@ -33,15 +33,26 @@ stop the library.
 
 All texture references are `res://` paths. The manifest records format version, profile, canvas,
 scene, layer IDs, slots, node names, texture paths, z-indexes, offsets, visibility, opacity,
-attachments, pivots, and tint groups.
+attachments, pivots, tint groups, scale-based breathing parameters, and generated attachment
+treatment provenance. Each generated coverage guard is exported as an explicit parent-attached
+Sprite2D immediately above its source parent and below its independently moving child and all
+protected detail overlays. Discrete
+visibility tracks activate it only while effective transforms diverge. Guards are never baked into
+or substituted for source artwork.
+
+Production export is strict for every divergent attachment, including future animation templates.
+If final rendered coverage and seam checks have not passed, the enabled animation blocks export. A
+user may export a valid subset only by explicitly disabling the failed template first.
 
 Export is transactional. Existing output is retained until the new directory is complete. When
 verification is requested, Godot first performs an import pass and then loads and instantiates the
 scene in a headless fixture. It checks stable hierarchy, texture availability, z-index values, and
-runtime replacement. It plays every generated animation through its duration, checks exact loop or
+runtime replacement. It checks position, rotation, and scale samples, generated attachment metadata,
+plays every generated animation through its duration, checks exact loop or
 rest restoration, and replaces a part while `idle` is playing. When the selected engine has a real
 rendering device it also compares an off-screen rest render against `preview.png`, allowing a mean
 channel difference of 18/255 for sampler differences. Godot's Windows headless driver is a dummy
-renderer, so that environment uses the exact-transform parity fallback and reports it in the engine
-output. A failure restores the previous output; only the successful engine-backed path receives
-`Godot Verified — Rig and animations`.
+renderer, so that environment reports `Godot structurally verified — rendered parity still
+required`; it verifies resources, tracks, transforms, generated-layer metadata, and rest
+restoration but cannot claim visual parity. A rendering-capable run that passes the image comparison
+reports `Godot visually verified — Rig and animations`. A failure restores the previous output.

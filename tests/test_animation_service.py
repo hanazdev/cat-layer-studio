@@ -35,7 +35,7 @@ def test_default_templates_generate_stable_rest_safe_mvp_tracks() -> None:
         placement.validation_status = "valid"
         placement.safe_rotation_min = -8
         placement.safe_rotation_max = 8
-    generated, warnings = generate_animation_set(project)
+    generated, warnings = generate_animation_set(project, purpose="preview")
 
     assert [animation.name for animation in generated] == [
         "idle",
@@ -121,12 +121,12 @@ def test_template_reset_and_history_undo_redo() -> None:
     animation_set = default_animation_set()
     history = AnimationHistory()
     history.reset(animation_set)
-    animation_set.templates[0].parameters["breathing_amount"] = "Expressive"
+    animation_set.templates[0].parameters["breathing_strength"] = "Noticeable"
     history.commit(animation_set)
-    assert history.undo().templates[0].parameters["breathing_amount"] == "Normal"
-    assert history.redo().templates[0].parameters["breathing_amount"] == "Expressive"
+    assert history.undo().templates[0].parameters["breathing_strength"] == "Natural"
+    assert history.redo().templates[0].parameters["breathing_strength"] == "Noticeable"
     reset_template(animation_set, "idle_breathing")
-    assert animation_set.templates[0].parameters["breathing_amount"] == "Normal"
+    assert animation_set.templates[0].parameters["breathing_strength"] == "Natural"
 
 
 def test_animation_settings_round_trip_inside_project_json() -> None:

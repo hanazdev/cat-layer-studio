@@ -37,7 +37,7 @@ class GeneratedAnimation:
     duration: float
     loop: bool
     tracks: tuple[GeneratedTrack, ...]
-    parameters: dict[str, float | int | bool | str] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
     required_joints: tuple[str, ...] = ()
     required_assets: tuple[str, ...] = ()
 
@@ -87,7 +87,7 @@ class AnimationSet:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AnimationSet:
         format_version = int(data.get("format_version", ANIMATION_FORMAT_VERSION))
-        if format_version not in {1, ANIMATION_FORMAT_VERSION}:
+        if format_version not in {1, 2, 3, ANIMATION_FORMAT_VERSION}:
             raise ValueError(f"Unsupported animation format version: {format_version}")
         templates = [
             AnimationTemplateSettings.from_dict(item) for item in data.get("templates", [])
@@ -101,6 +101,22 @@ class AnimationSet:
                     template.parameters["move_ears_too"] = False
                 if template.template_id.startswith("ear_twitch_"):
                     template.enabled = False
+        if format_version < 3:
+            for template in templates:
+                if template.template_id == "idle_breathing":
+                    old_strength = str(template.parameters.pop("breathing_amount", "Normal"))
+                    template.parameters["breathing_strength"] = {
+                        "Subtle": "Very subtle",
+                        "Normal": "Natural",
+                        "Expressive": "Noticeable",
+                    }.get(old_strength, old_strength)
+                    template.parameters["breathing_speed"] = template.parameters.pop(
+                        "speed", "Natural"
+                    )
+                    if template.parameters["breathing_speed"] == "Normal":
+                        template.parameters["breathing_speed"] = "Natural"
+                    template.parameters["keep_paws_grounded"] = True
+                    template.parameters["head_movement"] = False
         return cls(
             rig_profile=str(data.get("rig_profile", "adult_front_sitting")),
             templates=templates,
@@ -108,12 +124,16 @@ class AnimationSet:
             preview_speed=float(data.get("preview_speed", 1.0)),
             preview_loop=bool(data.get("preview_loop", True)),
             compatibility_status={}
-            if format_version < 2
+            if format_version < ANIMATION_FORMAT_VERSION
             else dict(data.get("compatibility_status", {})),
-            preview_status={} if format_version < 2 else dict(data.get("preview_status", {})),
-            export_status={} if format_version < 2 else dict(data.get("export_status", {})),
+            preview_status={}
+            if format_version < ANIMATION_FORMAT_VERSION
+            else dict(data.get("preview_status", {})),
+            export_status={}
+            if format_version < ANIMATION_FORMAT_VERSION
+            else dict(data.get("export_status", {})),
             last_successful_export=None
-            if format_version < 2
+            if format_version < ANIMATION_FORMAT_VERSION
             else data.get("last_successful_export"),
         )
 

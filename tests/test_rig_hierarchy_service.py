@@ -66,9 +66,9 @@ def test_body_translation_carries_head_once_and_matches_generated_key(tmp_path: 
     idle = generate_animation(project.animation_set.templates[0], project)
     rest, midpoint = evaluate_joint_matrices(project, idle, idle.duration / 2)
 
-    assert midpoint["Body"].ty == rest["Body"].ty - 4
-    assert midpoint["Head"].ty == rest["Head"].ty - 4
-    assert midpoint["Head"].tx == rest["Head"].tx
+    assert midpoint["Body"].yy > rest["Body"].yy
+    assert midpoint["Head"].yy > rest["Head"].yy
+    assert midpoint["Head"].xx == midpoint["Body"].xx
 
     rest_frame = composite_assembly(tmp_path, project)
     midpoint_frame = composite_animation_frame(tmp_path, project, idle, idle.duration / 2)
@@ -80,7 +80,7 @@ def test_head_tilt_uses_saved_neck_pivot_preserves_overlap_and_rest(tmp_path: Pa
     settings = next(
         item for item in project.animation_set.templates if item.template_id == "head_tilt_left"
     )
-    animation = generate_animation(settings, project)
+    animation = generate_animation(settings, project, purpose="preview")
     extent_time = animation.tracks[0].keys[1].time
     rest, extent = evaluate_joint_matrices(project, animation, extent_time)
 

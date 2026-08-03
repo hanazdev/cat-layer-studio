@@ -153,7 +153,7 @@ class ExportView(QWidget):
                         "The previous valid export was restored.\n\n" + verification.output[-2000:],
                     )
                     return
-                self.project.godot_export_status = "Godot Verified — Rig and animations"
+                self.project.godot_export_status = verification.message
                 accept_export(result)
                 if self.project.animation_set:
                     self.project.animation_set.last_successful_export = (
@@ -161,7 +161,13 @@ class ExportView(QWidget):
                     )
                 message = (
                     "Godot loaded the rig and animation library, played every generated "
-                    "animation, and replaced a texture during playback successfully."
+                    "animation, and replaced a texture during playback successfully. "
+                    + (
+                        "Rendered parity also passed."
+                        if verification.visual_parity_verified
+                        else "This dummy-renderer run checked structure and transforms only; "
+                        "a rendering-capable Godot run is still required for visual parity."
+                    )
                 )
             else:
                 self.project.godot_export_status = "Exported — unverified"

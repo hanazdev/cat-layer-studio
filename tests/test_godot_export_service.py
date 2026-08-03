@@ -6,6 +6,7 @@ from PIL import Image
 
 from cat_layer_studio.models.assembly_layer import AssemblyLayer
 from cat_layer_studio.models.project import Project
+from cat_layer_studio.services.animation_service import default_animation_set
 from cat_layer_studio.services.godot_export_service import (
     accept_export,
     export_godot_rig,
@@ -22,6 +23,10 @@ def _project(root: Path) -> Project:
     (root / "components").mkdir(parents=True)
     Image.new("RGBA", (16, 16), (120, 30, 20, 255)).save(root / "components" / "head.png")
     project = Project("Generic", "master.png", 16, 16)
+    project.animation_set = default_animation_set()
+    for item in project.animation_set.templates:
+        if item.template_id.startswith("head_tilt"):
+            item.enabled = False
     project.assembly_layers = [
         AssemblyLayer(
             "head-id",
@@ -83,10 +88,9 @@ def test_native_export_contains_generic_scene_manifest_and_runtime_api(tmp_path:
     assert [item["name"] for item in animation_manifest["animations"]] == [
         "idle",
         "tail_sway",
-        "head_tilt_left",
-        "head_tilt_right",
         "happy_bounce",
     ]
+    assert animation_manifest["compatibility_warnings"]["head_tilt_left"] == ("Needs automatic fix")
     assert animation_manifest["animation_library"].endswith(
         "cat_adult_front_sitting_animations.tres"
     )

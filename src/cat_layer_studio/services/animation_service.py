@@ -3,6 +3,10 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
 
 from cat_layer_studio.models.animation import (
     AnimationKey,
@@ -13,6 +17,9 @@ from cat_layer_studio.models.animation import (
 )
 from cat_layer_studio.models.project import Project
 from cat_layer_studio.models.rig_template import RigTemplate, get_rig_template
+from cat_layer_studio.services.attachment_treatment_service import (
+    enabled_attachment_treatment,
+)
 from cat_layer_studio.services.joint_placement_service import placement_for
 from cat_layer_studio.services.rig_hierarchy_service import (
     configured_joint_pivots,
@@ -48,7 +55,12 @@ TEMPLATE_DEFINITIONS: tuple[TemplateDefinition, ...] = (
         (),
         1.6,
         True,
-        {"speed": "Normal", "breathing_amount": "Normal", "head_movement": False},
+        {
+            "breathing_strength": "Natural",
+            "breathing_speed": "Natural",
+            "keep_paws_grounded": True,
+            "head_movement": False,
+        },
     ),
     TemplateDefinition(
         "tail_sway",
@@ -299,6 +311,15 @@ def export_status(settings: AnimationTemplateSettings, project: Project) -> str:
         if placement is None or placement.suggestion_x is None:
             return "Needs automatic preparation"
         return "Needs user review"
+    if settings.template_id.startswith("head_tilt"):
+        treatment = enabled_attachment_treatment(project, "Head")
+        if treatment is None:
+            return "Needs automatic fix"
+        if treatment.verification_status == "Passed with generated attachment treatment":
+            return treatment.verification_status
+        if treatment.verification_status == "Not supported by this artwork":
+            return treatment.verification_status
+        return "Needs automatic fix"
     return "Ready for export"
 
 
@@ -340,6 +361,30 @@ def _track(
     )
 
 
+def body_grounding_anchor(
+    project: Project, project_directory: Path | None = None
+) -> tuple[float, float]:
+    """Return the centre of the lowest visible Body paw band in canvas coordinates."""
+    body = next((item for item in project.assembly_layers if item.slot == "body"), None)
+    if body is not None and project_directory is not None:
+        try:
+            with Image.open(project.resolve(project_directory, body.texture_path)) as opened:
+                alpha = np.asarray(opened.convert("RGBA").getchannel("A"))
+            ys, xs = np.where(alpha >= 16)
+            if len(xs):
+                lowest = int(ys.max())
+                band = ys >= lowest - 3
+                return (
+                    float(np.median(xs[band])) + body.offset_x,
+                    float(lowest) + body.offset_y,
+                )
+        except OSError:
+            pass
+    pivots = configured_joint_pivots(project)
+    body_pivot = pivots.get("Body", (project.canvas_width / 2, project.canvas_height * 0.7))
+    return (body_pivot[0], float(project.canvas_height - 1))
+
+
 def generate_animation(
     settings: AnimationTemplateSettings,
     project: Project,
@@ -347,6 +392,7 @@ def generate_animation(
     asset_node_paths: dict[str, str] | None = None,
     available_joints: set[str] | None = None,
     purpose: str = "export",
+    project_directory: Path | None = None,
 ) -> GeneratedAnimation:
     message = compatibility_message(settings, project, available_joints=available_joints)
     if message:
@@ -360,7 +406,13 @@ def generate_animation(
     )
     blocking = {"Missing artwork", "Not supported", "Generation error"}
     if purpose == "export":
-        blocking |= {"Needs automatic preparation", "Needs user review", "Verification failed"}
+        blocking |= {
+            "Needs automatic preparation",
+            "Needs automatic fix",
+            "Needs user review",
+            "Not supported by this artwork",
+            "Verification failed",
+        }
     if status in blocking:
         raise AnimationCompatibilityError(status)
     definition = _definition(settings.template_id)
@@ -372,22 +424,47 @@ def generate_animation(
     tracks: list[GeneratedTrack] = []
 
     if settings.template_id == "idle_breathing":
-        amount = _amount(
-            p.get("breathing_amount"), {"subtle": 2.0, "normal": 4.0, "expressive": 7.0}, 4.0
-        )
+        strength = str(p.get("breathing_strength", "Natural")).lower()
+        scale_x, scale_y = {
+            "very subtle": (1.008, 1.006),
+            "natural": (1.016, 1.012),
+            "noticeable": (1.024, 1.018),
+        }.get(strength, (1.016, 1.012))
         x, y = rest["Body"]
+        anchor_x, anchor_y = body_grounding_anchor(project, project_directory)
+        body_pivot = configured_joint_pivots(project, template)["Body"]
+        grounded = bool(p.get("keep_paws_grounded", True))
+        compensation = (
+            (1.0 - scale_x) * (anchor_x - body_pivot[0]) if grounded else 0.0,
+            (1.0 - scale_y) * (anchor_y - body_pivot[1]) if grounded else 0.0,
+        )
+        p.update(
+            breathing_scale_x=scale_x,
+            breathing_scale_y=scale_y,
+            grounding_anchor_x=anchor_x,
+            grounding_anchor_y=anchor_y,
+            grounding_tolerance_pixels=0.75,
+            grounding_method="lowest visible Body paw band",
+        )
         tracks.append(
             _track(
                 paths["Body"],
-                "position",
-                [(0, (x, y)), (duration / 2, (x, y - amount)), (duration, (x, y))],
+                "scale",
+                [(0, (1.0, 1.0)), (duration / 2, (scale_x, scale_y)), (duration, (1.0, 1.0))],
+                "cubic",
             )
         )
-        if bool(p.get("head_movement", True)):
-            angle = math.radians(min(2.0, amount * 0.45))
+        if grounded:
             tracks.append(
                 _track(
-                    paths["Head"], "rotation", [(0, 0.0), (duration / 2, angle), (duration, 0.0)]
+                    paths["Body"],
+                    "position",
+                    [
+                        (0, (x, y)),
+                        (duration / 2, (x + compensation[0], y + compensation[1])),
+                        (duration, (x, y)),
+                    ],
+                    "cubic",
                 )
             )
     elif settings.template_id == "tail_sway":
@@ -549,6 +626,7 @@ def generate_animation_set(
     *,
     asset_node_paths: dict[str, str] | None = None,
     purpose: str = "export",
+    project_directory: Path | None = None,
 ) -> tuple[list[GeneratedAnimation], dict[str, str]]:
     animation_set = project.animation_set or default_animation_set(project.rig_profile)
     project.animation_set = animation_set
@@ -558,7 +636,13 @@ def generate_animation_set(
         animation_set.preview_status if purpose == "preview" else animation_set.export_status
     )
     if purpose == "export":
-        blocking |= {"Needs automatic preparation", "Needs user review", "Verification failed"}
+        blocking |= {
+            "Needs automatic preparation",
+            "Needs automatic fix",
+            "Needs user review",
+            "Not supported by this artwork",
+            "Verification failed",
+        }
     warnings = {
         template_id: status for template_id, status in status_map.items() if status in blocking
     }
@@ -575,7 +659,11 @@ def generate_animation_set(
         try:
             generated.append(
                 generate_animation(
-                    settings, project, asset_node_paths=asset_node_paths, purpose=purpose
+                    settings,
+                    project,
+                    asset_node_paths=asset_node_paths,
+                    purpose=purpose,
+                    project_directory=project_directory,
                 )
             )
         except AnimationCompatibilityError as error:
@@ -595,6 +683,8 @@ def sample_track(track: GeneratedTrack, time: float) -> object:
             if track.interpolation == "nearest" or isinstance(left.value, (bool, str)):
                 return left.value
             ratio = (time - left.time) / (right.time - left.time)
+            if track.interpolation == "cubic":
+                ratio = ratio * ratio * (3.0 - 2.0 * ratio)
             if isinstance(left.value, tuple) and isinstance(right.value, tuple):
                 return tuple(
                     a + (b - a) * ratio for a, b in zip(left.value, right.value, strict=True)

@@ -31,9 +31,21 @@ class Affine2D:
         )
 
     @classmethod
-    def local(cls, position: tuple[float, float], rotation: float = 0.0) -> Affine2D:
+    def local(
+        cls,
+        position: tuple[float, float],
+        rotation: float = 0.0,
+        scale: tuple[float, float] = (1.0, 1.0),
+    ) -> Affine2D:
         cosine, sine = math.cos(rotation), math.sin(rotation)
-        return cls(cosine, sine, -sine, cosine, position[0], position[1])
+        return cls(
+            cosine * scale[0],
+            sine * scale[0],
+            -sine * scale[1],
+            cosine * scale[1],
+            position[0],
+            position[1],
+        )
 
     def inverse(self) -> Affine2D:
         determinant = self.xx * self.yy - self.yx * self.xy
@@ -123,8 +135,15 @@ def evaluate_joint_matrices(
             if isinstance(sampled_rotation, (int, float))
             else 0.0
         )
+        sampled_scale = samples.get((paths[joint.name], "scale"), (1.0, 1.0))
+        if not isinstance(sampled_scale, tuple):
+            sampled_scale = (1.0, 1.0)
+        scale = (
+            1.0 + (float(sampled_scale[0]) - 1.0) * movement_scale,
+            1.0 + (float(sampled_scale[1]) - 1.0) * movement_scale,
+        )
         rest_local = Affine2D.local(rest_position)
-        animated_local = Affine2D.local(position, rotation)
+        animated_local = Affine2D.local(position, rotation, scale)
         if joint.parent is None:
             rest_world[joint.name] = rest_local
             animated_world[joint.name] = animated_local

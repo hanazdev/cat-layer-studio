@@ -343,9 +343,7 @@ def prepare_movements_automatically(
         for joint_name in required_movement_joints(settings):
             placement = placement_for(project, joint_name)
             if placement is not None and placement.approved:
-                minimum, maximum = find_safe_rotation_range(
-                    project_directory, project, joint_name
-                )
+                minimum, maximum = find_safe_rotation_range(project_directory, project, joint_name)
                 if minimum < 0 < maximum:
                     placement.validation_status = "valid"
                     prepared.add(joint_name)

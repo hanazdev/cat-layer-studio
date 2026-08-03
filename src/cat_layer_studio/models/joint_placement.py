@@ -31,6 +31,13 @@ class JointPlacement:
         value = {key: deepcopy(item) for key, item in data.items() if key in allowed}
         value["x"] = float(value["x"])
         value["y"] = float(value["y"])
+        if value.get("approved"):
+            value.setdefault("last_approved_x", value["x"])
+            value.setdefault("last_approved_y", value["y"])
+            if value.get("last_approved_x") is None:
+                value["last_approved_x"] = value["x"]
+            if value.get("last_approved_y") is None:
+                value["last_approved_y"] = value["y"]
         return cls(**value)
 
 
@@ -62,3 +69,19 @@ class JointPlacementHistory:
             return None
         self.index += 1
         return deepcopy(self.states[self.index])
+
+
+@dataclass(slots=True)
+class MovementCalibrationSession:
+    """A reversible, animation-specific movement setup transaction."""
+
+    animation_template_id: str
+    joint_name: str
+    stationary_parent_joint: str
+    original_joint_placement: JointPlacement
+    working_joint_placement: JointPlacement
+    original_animation_parameters: dict[str, Any]
+    requested_range: tuple[float, float] | None
+    project_state_at_start: dict[str, Any]
+    dirty: bool = False
+    saved: bool = False

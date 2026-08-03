@@ -24,9 +24,15 @@ from PySide6.QtWidgets import (
 )
 
 from cat_layer_studio.models.animation import AnimationKey, GeneratedAnimation, GeneratedTrack
-from cat_layer_studio.models.joint_placement import JointPlacementHistory
+from cat_layer_studio.models.joint_placement import (
+    JointPlacementHistory,
+    MovementCalibrationSession,
+)
 from cat_layer_studio.models.project import Project
 from cat_layer_studio.models.rig_template import get_rig_template
+from cat_layer_studio.services.attachment_treatment_service import (
+    prepare_head_tilt_attachments,
+)
 from cat_layer_studio.services.composition_service import (
     composite_animation_frame,
     composite_assembly,
@@ -42,9 +48,16 @@ from cat_layer_studio.services.joint_placement_service import (
     reset_joint_to_template,
     resolve_joint_placement,
     resolved_joint_placements,
+    restore_last_approved_placement,
     set_joint_point,
     template_joint_placement,
     update_suggestion,
+)
+from cat_layer_studio.services.movement_calibration_service import (
+    accept_calibration_session,
+    begin_calibration_session,
+    cancel_calibration_session,
+    refresh_working_state,
 )
 from cat_layer_studio.services.rig_hierarchy_service import joint_paths, local_rest_positions
 from cat_layer_studio.widgets.composite_canvas import CompositeCanvas
@@ -53,24 +66,27 @@ from cat_layer_studio.widgets.composite_canvas import CompositeCanvas
 class MovementSetupView(QWidget):
     project_changed = Signal()
     movement_point_accepted = Signal(str)
+    calibration_cancelled = Signal(str)
+    calibration_finished = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
         self.project_directory: Path | None = None
         self.project: Project | None = None
         self.history = JointPlacementHistory()
+        self.calibration_session: MovementCalibrationSession | None = None
         self.current_time = 0.0
         self.timer = QTimer(self)
         self.timer.setInterval(33)
         self.timer.timeout.connect(self._tick)
 
-        heading = QLabel("Movement Setup")
-        heading.setStyleSheet("font-size: 20px; font-weight: 600")
-        intro = QLabel(
+        self.heading = QLabel("Movement Setup")
+        self.heading.setStyleSheet("font-size: 20px; font-weight: 600")
+        self.intro = QLabel(
             "The app placed this movement point inside the part attachment. Preview the "
             "movement below. If it looks correct, choose Accept."
         )
-        intro.setWordWrap(True)
+        self.intro.setWordWrap(True)
         self.joint_choice = QComboBox()
         self.joint_choice.currentTextChanged.connect(self._joint_changed)
         self.connection = QLabel("Choose the moving part.")
@@ -97,39 +113,61 @@ class MovementSetupView(QWidget):
                 button = QPushButton(f"{label} {amount:g}px")
                 button.clicked.connect(lambda _checked=False, x=dx, y=dy: self.nudge(x, y))
                 nudge.addWidget(button, row, column)
-        reset_suggestion = QPushButton("Reset to suggestion")
+        self.reset_suggestion_button = QPushButton("Reset to recommended point")
         reset_template = QPushButton("Reset to rig default")
         reset_all = QPushButton("Reset all joints")
-        undo = QPushButton("Undo")
-        redo = QPushButton("Redo")
-        accept = QPushButton("Accept suggestion")
-        reset_suggestion.clicked.connect(self.reset_to_suggestion)
+        self.undo_button = QPushButton("Undo last change")
+        self.redo_button = QPushButton("Redo")
+        self.restore_accepted_button = QPushButton("Restore last accepted point")
+        self.cancel_button = QPushButton("Cancel all changes")
+        self.accept_button = QPushButton("Use this setup")
+        self.reset_suggestion_button.clicked.connect(self.reset_to_suggestion)
         reset_template.clicked.connect(self.reset_to_template)
         reset_all.clicked.connect(self.reset_all)
-        undo.clicked.connect(self.undo)
-        redo.clicked.connect(self.redo)
-        accept.clicked.connect(self.accept)
+        self.undo_button.clicked.connect(self.undo)
+        self.redo_button.clicked.connect(self.redo)
+        self.restore_accepted_button.clicked.connect(self.restore_last_accepted)
+        self.cancel_button.clicked.connect(self.cancel_all_changes)
+        self.accept_button.clicked.connect(self.accept)
         edit_actions = QGridLayout()
-        for index, button in enumerate(
-            (reset_suggestion, reset_template, reset_all, undo, redo, accept)
-        ):
+        for index, button in enumerate((reset_template, reset_all)):
             edit_actions.addWidget(button, index // 2, index % 2)
 
         editor = QWidget()
         editor_layout = QVBoxLayout(editor)
-        editor_layout.addWidget(QLabel("1. Choose the moving part"))
-        editor_layout.addWidget(self.joint_choice)
+        self.moving_hierarchy = QLabel("Moving now: choose a part")
+        self.moving_hierarchy.setWordWrap(True)
+        self.session_status = QLabel("Saved — this movement setup will be used for export")
+        self.session_status.setWordWrap(True)
+        editor_layout.addWidget(self.moving_hierarchy)
+        editor_layout.addWidget(self.session_status)
         editor_layout.addWidget(self.connection)
         editor_layout.addWidget(self.confidence)
         advanced = QGroupBox("Advanced: fine-tune movement point")
         advanced.setCheckable(True)
         advanced.setChecked(False)
         advanced_layout = QVBoxLayout(advanced)
+        advanced_layout.addWidget(QLabel("Generic joint selector"))
+        advanced_layout.addWidget(self.joint_choice)
         advanced_layout.addLayout(form)
         advanced_layout.addWidget(QLabel("Drag the orange point or nudge it"))
         advanced_layout.addLayout(nudge)
         advanced_layout.addLayout(edit_actions)
         editor_layout.addWidget(advanced)
+        recovery = QGridLayout()
+        for index, button in enumerate(
+            (
+                self.undo_button,
+                self.redo_button,
+                self.reset_suggestion_button,
+                self.restore_accepted_button,
+                self.cancel_button,
+                self.accept_button,
+            )
+        ):
+            recovery.addWidget(button, index // 2, index % 2)
+        editor_layout.addWidget(QLabel("Recovery and save"))
+        editor_layout.addLayout(recovery)
         editor_layout.addStretch()
 
         self.canvas = CompositeCanvas()
@@ -182,6 +220,20 @@ class MovementSetupView(QWidget):
         self.timeline.valueChanged.connect(self._scrubbed)
         find_safe = QPushButton("Find safe movement range")
         find_safe.clicked.connect(self.find_safe_range)
+        self.fix_attachment = QPushButton("Fix head attachment automatically")
+        self.fix_attachment.clicked.connect(self.fix_head_attachment)
+        self.fix_attachment.setVisible(False)
+        left_extreme = QPushButton("Preview left extreme")
+        resting_pose = QPushButton("Preview resting pose")
+        right_extreme = QPushButton("Preview right extreme")
+        full_movement = QPushButton("Play full movement")
+        left_extreme.clicked.connect(lambda: self._show_time(0.5))
+        resting_pose.clicked.connect(lambda: self._show_time(0.0))
+        right_extreme.clicked.connect(lambda: self._show_time(1.5))
+        full_movement.clicked.connect(self.restart)
+        quick_inspection = QHBoxLayout()
+        for button in (left_extreme, resting_pose, right_extreme, full_movement):
+            quick_inspection.addWidget(button)
         self.diagnostic = QLabel("4. Check the attachment — preview a movement.")
         self.diagnostic.setWordWrap(True)
         preview = QWidget()
@@ -190,6 +242,7 @@ class MovementSetupView(QWidget):
         preview_layout.addWidget(self.canvas, 1)
         preview_layout.addLayout(controls)
         preview_layout.addWidget(self.timeline)
+        preview_layout.addLayout(quick_inspection)
         preview_layout.addLayout(test_form)
         preview_layout.addWidget(self.ghost)
         preview_layout.addWidget(self.ghost_banner)
@@ -202,6 +255,7 @@ class MovementSetupView(QWidget):
         preview_layout.addWidget(self.points)
         preview_layout.addWidget(self.extents)
         preview_layout.addWidget(find_safe)
+        preview_layout.addWidget(self.fix_attachment)
         preview_layout.addWidget(self.diagnostic)
 
         splitter = QSplitter()
@@ -209,8 +263,8 @@ class MovementSetupView(QWidget):
         splitter.addWidget(preview)
         splitter.setStretchFactor(1, 1)
         layout = QVBoxLayout(self)
-        layout.addWidget(heading)
-        layout.addWidget(intro)
+        layout.addWidget(self.heading)
+        layout.addWidget(self.intro)
         layout.addWidget(splitter, 1)
         self._install_shortcuts()
 
@@ -225,6 +279,7 @@ class MovementSetupView(QWidget):
     def set_project(self, directory: Path, project: Project) -> None:
         self.pause()
         self.project_directory, self.project = directory, project
+        self.calibration_session = None
         ensure_joint_placements(project)
         self.history.reset(project.joint_placements)
         current = self.joint_choice.currentText()
@@ -237,7 +292,32 @@ class MovementSetupView(QWidget):
         self.joint_choice.blockSignals(False)
         self._joint_changed(self.joint_choice.currentText())
 
+    def open_context(self, animation_template_id: str) -> None:
+        if not self.project:
+            return
+        self.calibration_session = begin_calibration_session(self.project, animation_template_id)
+        session = self.calibration_session
+        self.history.reset(self.project.joint_placements)
+        self.heading.setText(f"Fix {animation_template_id.replace('_', ' ').title()}")
+        self.intro.setText(
+            f"Moving part: {session.joint_name}\nAttached to: "
+            f"{session.stationary_parent_joint}\nOnly the head, ears and eyes will turn. "
+            "The body will remain still."
+        )
+        self.joint_choice.blockSignals(True)
+        self.joint_choice.clear()
+        self.joint_choice.addItem(session.joint_name)
+        self.joint_choice.setCurrentText(session.joint_name)
+        self.joint_choice.blockSignals(False)
+        self.session_status.setText("Previewing — changes are temporary")
+        self.fix_attachment.setVisible(session.joint_name == "Head")
+        self._joint_changed(session.joint_name)
+
     def open_joint(self, joint_name: str) -> None:
+        self.calibration_session = None
+        self.heading.setText("Movement Setup")
+        self.session_status.setText("Saved — this movement setup will be used for export")
+        self.fix_attachment.setVisible(False)
         self.joint_choice.setCurrentText(joint_name)
 
     def selected_joint(self) -> str:
@@ -277,7 +357,24 @@ class MovementSetupView(QWidget):
                 else "move through both maximum extents"
             )
         )
+        descendants = {
+            "Head": "Head\n├── Ears\n└── Eyes",
+            "Body": "Body\n├── Head, Ears and Eyes\n└── Tail",
+            "Tail": "Tail",
+        }.get(joint.name, joint.name)
+        stationary = "Body and Tail" if joint.name == "Head" else (joint.parent or "none")
+        self.moving_hierarchy.setText(
+            f"Moving now:\n{descendants}\n\nStationary:\n{stationary}"
+            + (
+                "\n\nYou are now testing the whole body, not the head."
+                if joint.name == "Body"
+                else ""
+            )
+        )
         review = "Accepted" if placement.approved else "Review needed"
+        self.restore_accepted_button.setEnabled(
+            placement.last_approved_x is not None and placement.last_approved_y is not None
+        )
         suggestion_x = placement.suggestion_x if placement.suggestion_x is not None else placement.x
         suggestion_y = placement.suggestion_y if placement.suggestion_y is not None else placement.y
         reason = placement.suggestion_reason or "Rig fallback reference."
@@ -290,7 +387,11 @@ class MovementSetupView(QWidget):
         if not self.project:
             return
         self.history.commit(self.project.joint_placements)
-        self.project_changed.emit()
+        if self.calibration_session:
+            refresh_working_state(self.calibration_session, self.project)
+            self.session_status.setText("Previewing — changes are temporary")
+        else:
+            self.project_changed.emit()
         self._refresh_fields()
         self._render()
 
@@ -319,6 +420,23 @@ class MovementSetupView(QWidget):
             reset_joint_to_template(self.project, self.selected_joint())
             self._commit()
 
+    def restore_last_accepted(self) -> None:
+        if self.project:
+            restore_last_approved_placement(self.project, self.selected_joint())
+            self._commit()
+
+    def cancel_all_changes(self) -> None:
+        if not self.project or not self.calibration_session:
+            return
+        template_id = self.calibration_session.animation_template_id
+        cancel_calibration_session(self.calibration_session, self.project)
+        self.calibration_session = None
+        self.project_changed.emit()
+        self.calibration_cancelled.emit(template_id)
+
+    def has_temporary_session(self) -> bool:
+        return self.calibration_session is not None
+
     def reset_all(self) -> None:
         if self.project:
             for joint in get_rig_template(self.project.rig_profile).joints:
@@ -341,10 +459,21 @@ class MovementSetupView(QWidget):
 
     def accept(self) -> None:
         if self.project:
-            placement = accept_joint_placement(self.project, self.selected_joint())
+            if self.calibration_session:
+                template_id = self.calibration_session.animation_template_id
+                accept_calibration_session(self.calibration_session, self.project)
+                placement = placement_for(self.project, self.selected_joint())
+                self.session_status.setText("Saved — this movement setup will be used for export")
+                self.calibration_session = None
+            else:
+                template_id = ""
+                placement = accept_joint_placement(self.project, self.selected_joint())
+            assert placement is not None
             self.history.commit(self.project.joint_placements)
             self.project_changed.emit()
             self.movement_point_accepted.emit(placement.joint_name)
+            if template_id:
+                self.calibration_finished.emit(template_id)
             self._refresh_fields()
 
     def _test_animation(self) -> GeneratedAnimation | None:
@@ -357,7 +486,12 @@ class MovementSetupView(QWidget):
         duration = 2.0
         keys = (0.0, 0.5, 1.0, 1.5, 2.0)
         tracks: list[GeneratedTrack] = []
-        angle = math.radians(self.rotation.value())
+        requested = (
+            max(abs(value) for value in self.calibration_session.requested_range)
+            if self.calibration_session and self.calibration_session.requested_range
+            else self.rotation.value()
+        )
+        angle = math.radians(requested)
         if angle:
             tracks.append(
                 GeneratedTrack(
@@ -467,6 +601,29 @@ class MovementSetupView(QWidget):
                 "Review the extremes, then accept the movement point."
             )
             self._refresh_fields()
+
+    def fix_head_attachment(self) -> None:
+        if not self.project or not self.project_directory:
+            return
+        results = prepare_head_tilt_attachments(self.project_directory, self.project)
+        self.diagnostic.setText(
+            "Automatic attachment check\n"
+            + "\n".join(
+                f"{template_id.replace('_', ' ').title()} — {status}"
+                for template_id, status in results.items()
+            )
+        )
+        if self.calibration_session:
+            self.calibration_session.dirty = True
+        self._render()
+
+    def _show_time(self, time: float) -> None:
+        self.pause()
+        self.current_time = time
+        self.timeline.blockSignals(True)
+        self.timeline.setValue(round(time / 2.0 * 1000))
+        self.timeline.blockSignals(False)
+        self._render()
 
     def play(self) -> None:
         self.timer.start()

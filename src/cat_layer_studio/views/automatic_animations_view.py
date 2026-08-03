@@ -39,6 +39,11 @@ from cat_layer_studio.services.animation_service import (
     sample_track,
     update_compatibility,
 )
+from cat_layer_studio.services.attachment_treatment_service import (
+    animation_treatments_are_current,
+    prepare_animation_attachment_treatments,
+    prepare_head_tilt_attachments,
+)
 from cat_layer_studio.services.composition_service import (
     composite_animation_frame,
     composite_assembly,
@@ -82,7 +87,9 @@ class AutomaticAnimationsView(QWidget):
         self.template_enabled.toggled.connect(self._enabled_changed)
         self.requirements = QLabel()
         self.requirements.setWordWrap(True)
-        self.adjust_movement_point = QPushButton("Advanced: fine-tune movement point")
+        self.fix_movement = QPushButton("Fix movement automatically")
+        self.fix_movement.clicked.connect(self._fix_selected_movement)
+        self.adjust_movement_point = QPushButton("Review setup")
         self.adjust_movement_point.clicked.connect(self._adjust_movement_point)
         self.parameter_box = QGroupBox("3. Adjust movement")
         self.parameter_form = QFormLayout(self.parameter_box)
@@ -100,6 +107,7 @@ class AutomaticAnimationsView(QWidget):
         choose_layout.addWidget(self.templates)
         choose_layout.addWidget(self.template_enabled)
         choose_layout.addWidget(self.requirements)
+        choose_layout.addWidget(self.fix_movement)
         choose_layout.addWidget(self.adjust_movement_point)
         choose_layout.addWidget(self.parameter_box)
         choose_layout.addLayout(reset_row)
@@ -111,10 +119,16 @@ class AutomaticAnimationsView(QWidget):
         pause = QPushButton("Pause")
         restart = QPushButton("Restart")
         rest = QPushButton("Return to resting pose")
+        self.preview_exhale = QPushButton("Preview exhale")
+        self.preview_inhale = QPushButton("Preview inhale")
+        self.preview_exhale.setVisible(False)
+        self.preview_inhale.setVisible(False)
         play.clicked.connect(self.play)
         pause.clicked.connect(self.pause)
         restart.clicked.connect(self.restart)
         rest.clicked.connect(self.return_to_rest_pose)
+        self.preview_exhale.clicked.connect(self.preview_idle_exhale)
+        self.preview_inhale.clicked.connect(self.preview_idle_inhale)
         self.loop = QCheckBox("Loop preview")
         self.loop.setChecked(True)
         self.loop.toggled.connect(self._preview_options_changed)
@@ -148,6 +162,9 @@ class AutomaticAnimationsView(QWidget):
             self.compare_rest,
         ):
             controls.addWidget(widget)
+        breathing_extremes = QHBoxLayout()
+        breathing_extremes.addWidget(self.preview_exhale)
+        breathing_extremes.addWidget(self.preview_inhale)
         self.scrubber = QSlider()
         self.scrubber.setRange(0, 1000)
         self.scrubber.valueChanged.connect(self._scrubbed)
@@ -165,6 +182,7 @@ class AutomaticAnimationsView(QWidget):
         preview_layout.addWidget(self.animation_choice)
         preview_layout.addWidget(self.canvas, 1)
         preview_layout.addLayout(controls)
+        preview_layout.addLayout(breathing_extremes)
         preview_layout.addWidget(self.scrubber)
         preview_layout.addWidget(self.time_label)
         preview_layout.addWidget(self.motion_label)
@@ -239,6 +257,24 @@ class AutomaticAnimationsView(QWidget):
             return None
         return self.project.animation_set.templates[row]
 
+    def select_template(self, template_id: str) -> None:
+        if not self.project or not self.project.animation_set:
+            return
+        for row, settings in enumerate(self.project.animation_set.templates):
+            if settings.template_id == template_id:
+                self.templates.setCurrentRow(row)
+                self.animation_choice.setCurrentText(
+                    next(
+                        (
+                            item.name
+                            for item in self.generated_animations
+                            if item.template_id == template_id
+                        ),
+                        "",
+                    )
+                )
+                break
+
     def _template_selected(self, _row: int) -> None:
         settings = self._settings()
         if not settings or not self.project or not self.project.animation_set:
@@ -264,6 +300,7 @@ class AutomaticAnimationsView(QWidget):
         )
         movement_joint = self._movement_joint(settings.template_id)
         self.adjust_movement_point.setVisible(movement_joint is not None)
+        self.fix_movement.setVisible(settings.template_id.startswith("head_tilt"))
         self._clear_parameter_form()
         for key, value in settings.parameters.items():
             widget = self._parameter_widget(key, value)
@@ -274,7 +311,9 @@ class AutomaticAnimationsView(QWidget):
     def _plain_label(key: str) -> str:
         labels = {
             "speed": "How fast should it move?",
-            "breathing_amount": "Breathing amount",
+            "breathing_strength": "Breathing strength",
+            "breathing_speed": "Breathing speed",
+            "keep_paws_grounded": "Keep paws grounded (Recommended)",
             "head_movement": "Head movement",
             "sway_amount": "Tail sway amount",
             "pause_between_sways": "Pause between sways",
@@ -314,7 +353,8 @@ class AutomaticAnimationsView(QWidget):
             "direction": ["Left first", "Right first"]
             if "tail" in (self._settings().template_id if self._settings() else "")
             else ["Left", "Right"],
-            "breathing_amount": ["Subtle", "Normal", "Expressive"],
+            "breathing_strength": ["Very subtle", "Natural", "Noticeable"],
+            "breathing_speed": ["Slow", "Natural", "Quick"],
             "sway_amount": ["Subtle", "Normal", "Expressive"],
             "movement_amount": ["Subtle", "Normal", "Expressive"],
             "tilt_amount": ["Subtle", "Normal", "Expressive"],
@@ -349,12 +389,31 @@ class AutomaticAnimationsView(QWidget):
 
     def _adjust_movement_point(self) -> None:
         if (settings := self._settings()) and (joint := self._movement_joint(settings.template_id)):
-            self.adjust_movement_point_requested.emit(joint)
+            del joint
+            self.adjust_movement_point_requested.emit(settings.template_id)
+
+    def _fix_selected_movement(self) -> None:
+        if not self.project or not self.project_directory:
+            return
+        results = prepare_head_tilt_attachments(self.project_directory, self.project)
+        if self.project.animation_set:
+            update_compatibility(self.project.animation_set, self.project)
+        self.project_changed.emit()
+        self.generate()
+        self.warning.setText(
+            "Head attachment preparation\n"
+            + "\n".join(
+                f"{name.replace('_', ' ').title()} — {status}" for name, status in results.items()
+            )
+        )
 
     def _commit(self) -> None:
         if self.project and self.project.animation_set:
             update_compatibility(self.project.animation_set, self.project)
             self.history.commit(self.project.animation_set)
+            self.project.animation_verification_valid = False
+            self.project.godot_export_status = "Needs regeneration"
+            self.project.animation_set.last_successful_export = None
             self.project_changed.emit()
             self.generate()
 
@@ -386,7 +445,16 @@ class AutomaticAnimationsView(QWidget):
         if not self.project or not self.project_directory or not self.project.animation_set:
             return
         preparation = prepare_movements_automatically(self.project_directory, self.project)
-        generated, warnings = generate_animation_set(self.project, purpose="export")
+        preview_animations, _preview_warnings = generate_animation_set(
+            self.project, purpose="preview", project_directory=self.project_directory
+        )
+        attachment_results = prepare_animation_attachment_treatments(
+            self.project_directory, self.project, preview_animations
+        )
+        update_compatibility(self.project.animation_set, self.project)
+        generated, warnings = generate_animation_set(
+            self.project, purpose="export", project_directory=self.project_directory
+        )
         passed = "\n".join(f"{item.name} — Passed" for item in generated)
         blocked = "\n".join(f"{name} — {reason}" for name, reason in warnings.items())
         heading = "Ready to export" if not warnings else "Export preparation needs attention"
@@ -394,6 +462,11 @@ class AutomaticAnimationsView(QWidget):
             f"{heading}\n\n{passed}"
             + (f"\n{blocked}" if blocked else "")
             + f"\n\n{preparation.summary}"
+            + "\n"
+            + "\n".join(
+                f"{name.replace('_', ' ').title()} — {status}"
+                for name, status in attachment_results.items()
+            )
         )
         self.project_changed.emit()
 
@@ -443,7 +516,7 @@ class AutomaticAnimationsView(QWidget):
             return
         selected = self.animation_choice.currentText()
         self.generated_animations, warnings = generate_animation_set(
-            self.project, purpose="preview"
+            self.project, purpose="preview", project_directory=self.project_directory
         )
         self.animation_choice.blockSignals(True)
         self.animation_choice.clear()
@@ -451,6 +524,7 @@ class AutomaticAnimationsView(QWidget):
         if selected:
             self.animation_choice.setCurrentText(selected)
         self.animation_choice.blockSignals(False)
+        self._animation_selected(self.animation_choice.currentIndex())
         messages = [message.replace("\n", " ") for message in warnings.values()]
         if (current := self.current_animation()) and self.project_directory:
             messages.extend(inspect_animation_frames(self.project_directory, self.project, current))
@@ -474,6 +548,39 @@ class AutomaticAnimationsView(QWidget):
         )
 
     def _animation_selected(self, _index: int) -> None:
+        animation = self.current_animation()
+        if (
+            animation
+            and self.project
+            and self.project_directory
+            and not animation_treatments_are_current(
+                self.project_directory, self.project, animation
+            )
+        ):
+            self.pause()
+            self.warning.setText(
+                "Preparing seamless layer overlap automatically — source layers remain intact."
+            )
+            results = prepare_animation_attachment_treatments(
+                self.project_directory, self.project, self.generated_animations
+            )
+            if self.project.animation_set:
+                update_compatibility(self.project.animation_set, self.project)
+            self.project_changed.emit()
+            selected = animation.name
+            self.generate()
+            self.animation_choice.setCurrentText(selected)
+            self.warning.setText(
+                "Layer attachment preparation\n"
+                + "\n".join(
+                    f"{name.replace('_', ' ').title()} — {status}"
+                    for name, status in results.items()
+                )
+            )
+            return
+        is_idle = bool(animation and animation.template_id == "idle_breathing")
+        self.preview_exhale.setVisible(is_idle)
+        self.preview_inhale.setVisible(is_idle)
         self.restart()
 
     def play(self) -> None:
@@ -491,6 +598,20 @@ class AutomaticAnimationsView(QWidget):
         self.pause()
         self.current_time = 0.0
         self._render(rest=True)
+
+    def preview_idle_exhale(self) -> None:
+        animation = self.current_animation()
+        if animation and animation.template_id == "idle_breathing":
+            self.pause()
+            self.current_time = 0.0
+            self._render()
+
+    def preview_idle_inhale(self) -> None:
+        animation = self.current_animation()
+        if animation and animation.template_id == "idle_breathing":
+            self.pause()
+            self.current_time = animation.duration / 2
+            self._render()
 
     def _tick(self) -> None:
         animation = self.current_animation()

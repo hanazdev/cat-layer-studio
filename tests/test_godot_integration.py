@@ -6,6 +6,7 @@ from PIL import Image
 
 from cat_layer_studio.models.assembly_layer import AssemblyLayer
 from cat_layer_studio.models.project import Project
+from cat_layer_studio.services.animation_service import default_animation_set
 from cat_layer_studio.services.godot_export_service import accept_export, export_godot_rig
 from cat_layer_studio.services.godot_verification_service import verify_godot_export
 
@@ -28,6 +29,10 @@ def test_generated_rig_loads_and_replaces_a_slot_in_real_godot(tmp_path: Path) -
     for name in ("left_open", "right_open", "left_closed", "right_closed"):
         Image.new("RGBA", (32, 32), (30, 30, 30, 80)).save(components / f"{name}.png")
     project = Project("Integration", "master.png", 32, 32)
+    project.animation_set = default_animation_set()
+    for item in project.animation_set.templates:
+        if item.template_id.startswith("head_tilt") or item.template_id == "tail_sway":
+            item.enabled = False
     project.assembly_layers = [
         AssemblyLayer(
             "body",
